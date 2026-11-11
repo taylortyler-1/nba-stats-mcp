@@ -591,3 +591,89 @@ def test_database_without_positions(db_file):
         assert tools.list_stats(r)["positions"]["loaded"] is False
         with pytest.raises(ToolError, match="refresh_data"):
             tools.get_leaders(r, "pts", position="G")
+
+
+# --------------------------------------------------------------------------- stocks, ast/to, per 100
+
+
+@pytest.fixture
+def con_defense(db_file):
+    """The base fixture plus steals, blocks and turnovers for Jokić and Curry."""
+    with db.connect(read_only=False, path=db_file) as w:
+        w.execute(
+            "UPDATE player_games SET stl = 2, blk = 1, tov = 4 WHERE player_id = 1 AND game_id = 'g1'"
+        )
+        w.execute(
+            "UPDATE player_games SET stl = 1, blk = 2, tov = 2 WHERE player_id = 1 AND game_id = 'g2'"
+        )
+        w.execute(
+            "UPDATE player_games SET stl = 3, tov = 3 WHERE player_id = 2 AND game_id = 'g2'"
+        )
+    with db.connect(read_only=True, path=db_file) as r:
+        yield r
+
+
+def test_stocks_and_ast_to(con_defense):
+    con = con_defense
+    r = tools.get_stat(con, ["stocks", "ast/to"], player="Jokic", per_mode="totals")
+    # 6 stocks; 30 assists over 6 turnovers.
+    assert r["stats"]["stocks"]["value"] == 6
+    assert r["stats"]["ast_to"]["value"] == 5.0
+    assert (
+        tools.get_stat(con, "steals + blocks", player="Jokic")["stats"]["stocks"][
+            "value"
+        ]
+        == 2.0
+    )
+
+    log = tools.get_game_log(con, player="Jokic", stat="stocks,ast_to")
+    assert [(g["stocks"], g["ast_to"]) for g in log["games"]] == [
+        (0, None),  # g3: no turnovers -> ratio undefined
+        (3, 4.0),
+        (3, 2.5),
+    ]
+
+    # Seth Curry and Reaves have no assists, so they miss the 3 AST/game minimum.
+    lead = tools.get_leaders(con, "ast_to", min_games=1)
+    assert lead["qualification"]["min_ast_per_game"] == 3
+    assert [e["player"]["id"] for e in lead["leaders"]] == [1, 2]
+
+    lead = tools.get_leaders(con, "stocks", min_games=1, per_mode="totals")
+    assert [(e["player"]["id"], e["value"]) for e in lead["leaders"][:2]] == [
+        (1, 6),
+        (2, 3),
+    ]
+
+    fp = tools.get_stat(
+        con, "fpts", player="Jokic", scoring={"stocks": 2}, per_mode="totals"
+    )
+    assert fp["stats"]["fpts"]["value"] == 12.0
+
+
+# Game possessions: mean of both teams' FGA + 0.44 FTA - OREB + TOV (only FGA is set here).
+GAME_POSS = {"g1": (85 + 88) / 2, "g2": (84 + 86) / 2, "g3": (90 + 89) / 2}
+
+
+def test_per_100_possessions(con):
+    team = tools.get_stat(con, "pts", team="LAL", per_mode="per_100")
+    assert team["stats"]["pts"]["value"] == round(
+        335 * 100 / sum(GAME_POSS.values()), 1
+    )
+
+    # Jokić is on court for minutes / 48 of each game's possessions.
+    poss = sum(GAME_POSS[g] * m / 48 for g, m in (("g1", 36), ("g2", 30), ("g3", 34)))
+    r = tools.get_stat(con, "pts,ts_pct", player="Jokic", per_mode="per_100")
+    assert r["stats"]["pts"]["value"] == round(90 * 100 / poss, 1)
+    assert r["stats"]["ts_pct"]["value"] == round(90 / (2 * (58 + 0.44 * 17)), 3)
+
+    lead = tools.get_leaders(con, "pts", per_mode="per_100", min_games=1)
+    # Seth Curry's 5 minutes fail the 15 minutes/game floor, as in per_36.
+    assert lead["qualification"]["min_minutes_per_game"] == 15
+    assert 3 not in [e["player"]["id"] for e in lead["leaders"]]
+
+    teams = tools.get_leaders(con, "pts", entity="team", per_mode="per_100")
+    # GSW: 115 points on 85 possessions beats LAL's 335 on 261.
+    assert [(e["team"], e["value"]) for e in teams["leaders"][:2]] == [
+        ("GSW", round(115 * 100 / 85, 1)),
+        ("LAL", round(335 * 100 / 261, 1)),
+    ]

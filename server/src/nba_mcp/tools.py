@@ -2,7 +2,7 @@
 
 Every stat is computed from per-game box-score rows by first summing the base
 columns over the filtered games, then applying the stat's definition. That keeps
-derived stats (TS%, eFG%, per-36) correct for any filter combination -- season,
+derived stats (TS%, eFG%, per-36, per-100) correct for any filter combination -- season,
 opponent, last N games, a single team stint -- without precomputed tables.
 
 To add a stat, add a `Stat` to `STATS`. To add advanced stats later, add their
@@ -30,7 +30,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from .db import STAT_COLUMNS, has_table
 
 SeasonType = Literal["Regular Season", "Playoffs"]
-PerMode = Literal["totals", "per_game", "per_36"]
+PerMode = Literal["totals", "per_game", "per_36", "per_100"]
 Entity = Literal["player", "team"]
 
 Sums = dict[str, float]
@@ -48,6 +48,52 @@ def _div(num: float | None, den: float | None) -> float | None:
     if num is None or not den:
         return None
     return num / den
+
+
+def _col(c: str) -> str:
+    return f"COALESCE({c}, 0)"
+
+
+# --------------------------------------------------------------------------- per-game columns
+
+# Counting stats that combine stored columns, as per-game SQL over a games table.
+DERIVED_COLUMNS = {
+    "stocks": f"{_col('stl')} + {_col('blk')}",
+}
+
+
+def _poss_est(t: str) -> str:
+    """One team's possessions in a game, the common box-score estimate."""
+    return (
+        f"({_col(f'{t}.fga')} + 0.44 * {_col(f'{t}.fta')} "
+        f"- {_col(f'{t}.oreb')} + {_col(f'{t}.tov')})"
+    )
+
+
+# Game possessions: the mean of both teams' estimates (they differ slightly).
+_GAME_POSS = f"0.5 * ({_poss_est('t')} + {_poss_est('o')})"
+_OPPONENT_JOIN = (
+    "LEFT JOIN team_games o ON o.game_id = t.game_id AND o.team_id <> t.team_id"
+)
+
+
+def _source(table: str) -> str:
+    """`table` with a per-game `poss` column added, aliased back to `table`.
+
+    Team rows get the game's possessions. Player rows get the share they were on
+    court for: game possessions x player minutes / (team minutes / 5). Computed at
+    query time from stored box scores, so older databases need no re-ingest.
+    """
+    if table == "team_games":
+        sql = f"SELECT t.*, {_GAME_POSS} AS poss FROM team_games t {_OPPONENT_JOIN}"
+    else:
+        sql = (
+            f"SELECT p.*, {_GAME_POSS} * {_col('p.min')} * 5 / NULLIF(t.min, 0) AS poss "
+            "FROM player_games p "
+            "LEFT JOIN team_games t ON t.game_id = p.game_id AND t.team_id = p.team_id "
+            f"{_OPPONENT_JOIN}"
+        )
+    return f"({sql}) AS {table}"
 
 
 # --------------------------------------------------------------------------- registry
@@ -112,6 +158,15 @@ STATS: dict[str, Stat] = {
         _counting("stl", "Steals", "Steals.", "steals"),
         _counting("blk", "Blocks", "Blocked shots.", "blocks"),
         _counting("tov", "Turnovers", "Turnovers.", "turnovers", "to"),
+        _counting(
+            "stocks",
+            "Stocks",
+            "Steals + blocks.",
+            "stl+blk",
+            "steals + blocks",
+            "steals and blocks",
+            "stl blk",
+        ),
         _counting("pf", "Personal Fouls", "Personal fouls.", "fouls", "personal fouls"),
         _counting("min", "Minutes", "Minutes played.", "minutes", "mpg"),
         _counting(
@@ -165,6 +220,27 @@ STATS: dict[str, Stat] = {
             "Free throws attempted.",
             "free throw attempts",
             category="shooting",
+        ),
+        Stat(
+            "ast_to",
+            "Assist/Turnover Ratio",
+            "AST / TOV, from summed assists and turnovers (a ratio, not a fraction). "
+            "Null with zero turnovers.",
+            "box score",
+            (
+                "ast/to",
+                "ast/tov",
+                "a/to",
+                "ast to",
+                "ast_tov",
+                "assist to turnover",
+                "assist to turnover ratio",
+                "assist-to-turnover ratio",
+                "assist/turnover ratio",
+            ),
+            formula=lambda s: _div(s["ast"], s["tov"]),
+            volume="ast",
+            min_volume_per_game=3,
         ),
         Stat(
             "fg_pct",
@@ -222,7 +298,11 @@ STATS: dict[str, Stat] = {
     )
 }
 
-assert all(s.column in STAT_COLUMNS for s in STATS.values() if s.column)
+assert all(
+    s.column in STAT_COLUMNS or s.column in DERIVED_COLUMNS
+    for s in STATS.values()
+    if s.column
+)
 
 # Fantasy points: a counting stat over the per-game `fpts` expression that
 # `Scoring.sql()` builds. Only available when a scoring is resolved.
@@ -578,10 +658,6 @@ class ScoringTerm:
     aliases: tuple[str, ...] = ()
 
 
-def _col(c: str) -> str:
-    return f"COALESCE({c}, 0)"
-
-
 _DOUBLE_CATEGORIES = ("pts", "reb", "ast", "stl", "blk")
 _TENS = " + ".join(f"({_col(c)} >= 10)::INTEGER" for c in _DOUBLE_CATEGORIES)
 
@@ -589,7 +665,14 @@ SCORING_TERMS: dict[str, ScoringTerm] = {
     t.key: t
     for t in (
         *(
-            ScoringTerm(s.name, s.label, _col(s.name), (s.label, *s.aliases))
+            ScoringTerm(
+                s.name,
+                s.label,
+                f"({DERIVED_COLUMNS[s.name]})"
+                if s.name in DERIVED_COLUMNS
+                else _col(s.name),
+                (s.label, *s.aliases),
+            )
             for s in STATS.values()
             if not s.is_rate
         ),
@@ -792,6 +875,8 @@ def delete_fantasy_scoring(con: duckdb.DuckDBPyConnection, name: str) -> dict[st
 
 def _sums_sql(scoring: Scoring | None = None) -> str:
     sql = ", ".join(f"SUM({c}) AS {c}" for c in STAT_COLUMNS)
+    sql += "".join(f", SUM({e}) AS {c}" for c, e in DERIVED_COLUMNS.items())
+    sql += ", SUM(poss) AS poss"
     if scoring is not None:
         sql += f", SUM({scoring.sql()}) AS fpts"
     return sql
@@ -859,6 +944,9 @@ def stat_value(stat: Stat, sums: Sums, games: int, per_mode: PerMode) -> float |
         return round(total, 1) if stat.column in ("min", "fpts") else int(total)
     if per_mode == "per_game":
         return round(total / games, 1) if games else None
+    if per_mode == "per_100":
+        poss = sums.get("poss")
+        return round(total * 100 / poss, 1) if poss else None
     minutes = sums["min"]
     return round(total * 36 / minutes, 1) if minutes else None
 
@@ -1007,8 +1095,11 @@ def list_stats(
             "totals": "Sum over the games.",
             "per_game": "Average per game played (default).",
             "per_36": "Per 36 minutes played (players only).",
+            "per_100": "Per 100 possessions: team possessions, or for a player the "
+            "possessions while on court (estimated from minutes).",
         },
-        "notes": "Rate stats (percentages) are computed from summed makes/attempts and ignore per_mode.",
+        "notes": "Rate stats (percentages, ast_to) are computed from summed components "
+        "and ignore per_mode.",
         "fantasy": {
             "scoring_terms": {k: t.label for k, t in SCORING_TERMS.items()},
             "saved_profiles": scoring_profiles(con),
@@ -1066,7 +1157,7 @@ def get_stat(
     row = _rows_as_dicts(
         con.execute(
             f"""
-            WITH g AS (SELECT * FROM {sc.table} WHERE {sc.where} ORDER BY game_date DESC {limit})
+            WITH g AS (SELECT * FROM {_source(sc.table)} WHERE {sc.where} ORDER BY game_date DESC {limit})
             SELECT COUNT(*) AS gp, MIN(game_date) AS first_game, MAX(game_date) AS last_game,
                    {_sums_sql(fantasy)}
             FROM g
@@ -1164,11 +1255,12 @@ def get_game_log(
         last_n = "LIMIT ?"
         params.append(last_n_games)
     fpts_col = f", {fantasy.sql()} AS fpts" if fantasy else ""
+    derived = "".join(f", {e} AS {c}" for c, e in DERIVED_COLUMNS.items())
     rows = _rows_as_dicts(
         con.execute(
             f"""
             SELECT game_date, team_abbreviation, opponent_abbreviation, is_home, wl,
-                   {", ".join(STAT_COLUMNS)} {fpts_col}
+                   {", ".join(STAT_COLUMNS)} {derived} {fpts_col}
             FROM {sc.table} WHERE {sc.where}
             ORDER BY game_date DESC {last_n}
             """,
@@ -1319,14 +1411,14 @@ def get_leaders(
             SELECT player_id AS id, arg_max(player_name, game_date) AS name,
                    string_agg(DISTINCT team_abbreviation, '/' ORDER BY team_abbreviation) AS team,
                    COUNT(*) AS gp, {_sums_sql(fantasy)}
-            FROM player_games WHERE {where} GROUP BY player_id
+            FROM {_source("player_games")} WHERE {where} GROUP BY player_id
         """
         group_sql = f"SELECT g.*, {pos_col} AS position FROM ({group_sql}) g"
     else:
         group_sql = f"""
             SELECT team_id AS id, arg_max(team_abbreviation, game_date) AS name, NULL AS team,
                    COUNT(*) AS gp, {_sums_sql(fantasy)}
-            FROM team_games WHERE {where} GROUP BY team_id
+            FROM {_source("team_games")} WHERE {where} GROUP BY team_id
         """
     rows = _rows_as_dicts(con.execute(group_sql, params))
 
@@ -1355,7 +1447,7 @@ def get_leaders(
             qualification["min_games"] = min_games
         if s.is_rate and s.volume:
             qualification[f"min_{s.volume}_per_game"] = s.min_volume_per_game
-        if per_mode == "per_36" and not s.is_rate:
+        if per_mode in ("per_36", "per_100") and not s.is_rate:
             qualification["min_minutes_per_game"] = 15
 
     def qualifies(r: dict[str, Any]) -> bool:

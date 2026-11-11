@@ -106,9 +106,10 @@ SeasonTypeArg = Annotated[
     Field(description="Default: 'Regular Season'."),
 ]
 PerModeArg = Annotated[
-    Literal["totals", "per_game", "per_36"],
+    Literal["totals", "per_game", "per_36", "per_100"],
     Field(
-        description="How counting stats are expressed. per_36 is players only. Ignored for percentages."
+        description="How counting stats are expressed. per_36 is players only. per_100 is per 100 "
+        "possessions (for a player, possessions while on court). Ignored for percentages and ratios."
     ),
 ]
 ScoringArg = Annotated[
@@ -156,7 +157,7 @@ def get_stat(
     stat: Annotated[
         str | list[str],
         Field(
-            description="Stat name(s), e.g. 'pts', ['pts', 'reb', 'ast'], 'ts_pct', 'fpts'. Common names like 'points' work."
+            description="Stat name(s), e.g. 'pts', ['pts', 'reb', 'ast'], 'ts_pct', 'stocks', 'ast_to', 'fpts'. Common names like 'points' work."
         ),
     ],
     player: Annotated[
