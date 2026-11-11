@@ -45,8 +45,14 @@ REFRESH = ToolAnnotations(
     open_world_hint=True,
 )
 
-NO_DATA = "No NBA data is loaded yet. Call refresh_data to download it (about a minute), then retry."
+NO_DATA = "No NBA data is loaded yet. Call refresh_data to download it (a few seconds), then retry."
 BUSY = "The NBA database is being updated right now. Retry in a few seconds."
+# stats.nba.com stalls, rather than refusing, requests from VPNs and cloud servers.
+DOWNLOAD_FAILED = (
+    "Couldn't download from stats.nba.com ({error}).{saved} The site blocks most VPNs and cloud "
+    "servers, so if the user is on a VPN, ask them to turn it off and try again. Otherwise the "
+    "site may be down; try again in a few minutes."
+)
 
 MAX_REFRESH_SEASONS = 5
 REFRESH_PAUSE = 1.0  # seconds between stats.nba.com requests, to be polite
@@ -222,7 +228,7 @@ async def refresh_data(
 
     Call this when no data is loaded, when the user asks about games newer than list_stats'
     data_through date, or to load an older season. Loads regular season and playoffs.
-    Takes roughly 10-30 seconds per season; other tools keep working meanwhile.
+    Usually takes a few seconds per season; other tools keep working meanwhile.
     """
     if _refresh_lock.locked():
         raise ToolError(
@@ -255,10 +261,9 @@ async def refresh_data(
                 "Couldn't get write access to the database; another update may be running."
             ) from None
         except Exception as exc:
-            done = f" Already saved: {loaded}." if loaded else ""
+            saved = f" Already saved: {loaded}." if loaded else ""
             raise ToolError(
-                f"Downloading from stats.nba.com failed ({type(exc).__name__}: {exc}).{done} "
-                "The site is sometimes slow or blocks requests; try again in a few minutes."
+                DOWNLOAD_FAILED.format(error=f"{type(exc).__name__}: {exc}", saved=saved)
             ) from exc
         await ctx.report_progress(len(slices), len(slices), "Done")
 

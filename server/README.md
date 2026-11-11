@@ -36,7 +36,7 @@ claude mcp add hoops-stats -- uv --directory /absolute/path/to/nba-stats-mcp/ser
 
 ## Usage
 
-Ask your agent a question. On first use the database is empty; the agent calls `refresh_data` to download the current season (about a minute), then answers. Ask it to "load the 2023-24 season" to pull in older seasons, or to "refresh the data" to pick up last night's games.
+Ask your agent a question. On first use the database is empty; the agent calls `refresh_data` to download the current season (a few seconds), then answers. Ask it to "load the 2023-24 season" to pull in older seasons, or to "refresh the data" to pick up last night's games.
 
 | Tool | What it does |
 | --- | --- |

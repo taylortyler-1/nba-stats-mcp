@@ -123,6 +123,25 @@ def test_refresh_reports_download_failure(fake_nba, monkeypatch):
     monkeypatch.setattr(ingest, "fetch_slice", boom)
     r = call("refresh_data")
     assert r.is_error and "stats.nba.com" in text(r) and "timed out" in text(r)
+    assert "VPN" in text(r)
+
+
+def test_blocked_request_gives_up_quickly(monkeypatch):
+    """A stalled stats.nba.com request must fail well inside a ~80s tool-call limit."""
+    from nba_api.stats.endpoints import leaguegamelog
+
+    timeouts, sleeps = [], []
+
+    def stall(**kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise TimeoutError("Read timed out")
+
+    monkeypatch.setattr(leaguegamelog, "LeagueGameLog", stall)
+    monkeypatch.setattr(ingest.time, "sleep", sleeps.append)
+    with pytest.raises(TimeoutError):
+        ingest.fetch_game_log("team", "2025-26", "Regular Season")
+    worst_case = sum(timeouts) + sum(sleeps)
+    assert worst_case <= 40, (timeouts, sleeps)
 
 
 def test_reads_are_busy_while_writing(tmp_path):

@@ -116,7 +116,7 @@ Downloads game logs from stats.nba.com and replaces those seasons in the local d
 | --- | --- |
 | `seasons` | Optional list like `["2023-24", "2024-25"]`, at most 5 per call. Default: the current season only. Future seasons are rejected. |
 
-Each season loads both Regular Season and Playoffs: 4 requests with a 1-second pause between them, roughly 10–30 seconds per season. The tool reports progress while it runs. Other tools keep working, apart from a brief "being updated" window while each part is saved.
+Each season loads both Regular Season and Playoffs: 4 requests with a 1-second pause between them, usually a few seconds per season. stats.nba.com blocks most VPNs and cloud servers by stalling; a blocked request fails after about 35 seconds. The tool reports progress while it runs. Other tools keep working, apart from a brief "being updated" window while each part is saved.
 
 Returns:
 
@@ -161,5 +161,5 @@ The name returned is the most recent name in the data.
 | `per_36 applies to players only` | Use `per_game` or `totals` for teams. |
 | `ranks one stat at a time` | Make one `get_leaders` call per stat. |
 | `The team filter narrows a player leaderboard` | Drop `team` when `entity="team"`. |
-| `Downloading from stats.nba.com failed` | The site is slow or blocking. Retry later; any seasons listed as already saved are kept. |
+| `Couldn't download from stats.nba.com` | Usually a VPN: ask the user to turn it off and retry. Otherwise the site may be down; retry later. Any seasons listed as already saved are kept. |
 | `hasn't started` | A future season was requested. |

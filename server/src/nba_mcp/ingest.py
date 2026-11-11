@@ -123,8 +123,14 @@ def load_teams(con: duckdb.DuckDBPyConnection) -> None:
     con.unregister("incoming_teams")
 
 
+# A season's game log normally arrives in under a second. stats.nba.com stalls, rather
+# than refusing, requests it blocks (VPNs, cloud servers), so keep the wait short: a
+# blocked request fails in ~35s, inside the ~60-80s limit some clients put on a tool call.
+REQUEST_TIMEOUT = 15
+
+
 def fetch_game_log(
-    entity: Entity, season: str, season_type: str, retries: int = 3
+    entity: Entity, season: str, season_type: str, retries: int = 2
 ) -> pd.DataFrame:
     from nba_api.stats.endpoints import leaguegamelog
 
@@ -134,7 +140,7 @@ def fetch_game_log(
                 player_or_team_abbreviation="P" if entity == "player" else "T",
                 season=season,
                 season_type_all_star=season_type,
-                timeout=60,
+                timeout=REQUEST_TIMEOUT,
             )
             return result.get_data_frames()[0]
         except Exception as exc:  # nba_api surfaces network errors as many types

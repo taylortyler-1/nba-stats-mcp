@@ -17,6 +17,7 @@ It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers,
 
 - **Where it works:** Claude Code, and Cowork sessions on your own computer. The server runs locally, so regular chat on claude.ai doesn't start it.
 - **uv:** the plugin needs [uv](https://docs.astral.sh/uv/getting-started/installation/) installed. On macOS or Linux, run `curl -LsSf https://astral.sh/uv/install.sh | sh`. On Windows, run `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`. uv installs the right Python version for you.
+- **No VPN while downloading:** stats.nba.com blocks most VPNs and cloud servers. Turn your VPN off when the plugin downloads data. Asking questions about data already downloaded works with or without a VPN.
 
 The first start takes a minute or so while uv downloads Python and the server's packages. Later starts are fast.
 
@@ -32,7 +33,7 @@ The first start takes a minute or so while uv downloads Python and the server's 
 
 ## Use it
 
-Just ask a question. The first time, there's no data yet, so Claude calls `refresh_data` to download the current season, which takes about a minute, and then answers. You can also ask Claude to:
+Just ask a question. The first time, there's no data yet, so Claude calls `refresh_data` to download the current season, which takes a few seconds, and then answers. You can also ask Claude to:
 
 - "Refresh the NBA data" to pick up the latest games.
 - "Load the 2023-24 season" to add an older season. Each season only needs loading once.
@@ -49,7 +50,7 @@ This plugin isn't affiliated with or endorsed by the NBA. Data comes from the NB
 ## Troubleshooting
 
 - **The tools don't show up:** check that `uv` is installed and on your `PATH`. Desktop apps on macOS may not see a `PATH` set only in your shell profile, so restart the app after installing uv.
-- **"Downloading from stats.nba.com failed":** the site is sometimes slow or blocks requests, especially from cloud servers and VPNs. Wait a few minutes and try again.
+- **"Couldn't download from stats.nba.com":** the site doesn't respond to most VPNs and cloud servers; it stalls until the request times out (about 35 seconds). Turn your VPN off and try again. If you're not on a VPN, the site may be down; try again in a few minutes.
 
 ## Layout
 

@@ -14,7 +14,7 @@ The hoops-stats MCP server answers questions from a local database of NBA **box 
 | `list_stats` | Stat names, which seasons are loaded, and `data_through` (date of the latest game). Cheap — call it when unsure. |
 | `get_stat` | One player's or one team's numbers. Several stats at once: `stat=["pts","reb","ast"]`. |
 | `get_leaders` | Rank players or teams by one stat. |
-| `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes 10–30 s per season. |
+| `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes a few seconds per season. Fails if the user is on a VPN. |
 
 If these tools aren't available, the server isn't running. It's a local server, so it starts in Claude Code and in Cowork sessions on the user's computer, not in regular claude.ai chat, and it needs `uv` installed. Tell the user that instead of answering from memory.
 
