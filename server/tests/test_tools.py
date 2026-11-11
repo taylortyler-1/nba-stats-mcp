@@ -394,6 +394,12 @@ def test_stocks_and_ast_to(con_defense):
     assert fp["stats"]["fpts"]["value"] == 12.0
 
 
+def test_ratio_rounds_to_two_places_fractions_to_three():
+    sums = {"ast": 43, "tov": 17, "fgm": 7, "fga": 9}
+    assert stats.stat_value(stats.STATS["ast_to"], sums, 1, "totals") == 2.53
+    assert stats.stat_value(stats.STATS["fg_pct"], sums, 1, "totals") == 0.778
+
+
 # Game possessions: mean of both teams' FGA + 0.44 FTA - OREB + TOV (only FGA is set here).
 GAME_POSS = {"g1": (85 + 88) / 2, "g2": (84 + 86) / 2, "g3": (90 + 89) / 2}
 

@@ -58,6 +58,8 @@ class Stat:
     # Leaderboard qualification for rate stats: minimum of `volume` per game played.
     volume: str | None = None
     min_volume_per_game: float = 0.0
+    # Rounding for rate stats: 3 places for fractions (0.612); ratios use fewer.
+    decimals: int = 3
 
     @property
     def is_rate(self) -> bool:
@@ -186,6 +188,7 @@ STATS: dict[str, Stat] = {
             formula=lambda s: _div(s["ast"], s["tov"]),
             volume="ast",
             min_volume_per_game=3,
+            decimals=2,  # conventional for AST/TO (e.g. 2.53)
         ),
         Stat(
             "fg_pct",
@@ -287,7 +290,7 @@ def resolve_stats(stat: str | list[str]) -> list[Stat]:
 def stat_value(stat: Stat, sums: Sums, games: int, per_mode: PerMode) -> float | None:
     if stat.formula is not None:
         v = stat.formula(sums)
-        return None if v is None else round(v, 3)
+        return None if v is None else round(v, stat.decimals)
     assert (
         stat.column is not None
     )  # every non-formula stat is a counting stat with a column
