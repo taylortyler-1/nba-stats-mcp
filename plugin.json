@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hoops-stats",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ask about NBA player and team stats — averages, shooting percentages, position-filtered leaderboards, game logs, teammate splits, and fantasy points with your league's scoring — computed locally from box scores downloaded from stats.nba.com.",
   "author": {
     "name": "Taylor Tyler"
@@ -16,8 +16,9 @@
         "shortDescription": "Local NBA stats and fantasy basketball analysis.",
         "developerName": "Taylor Tyler",
         "composerIcon": "./.claude-plugin/icon.png",
+        "logo": "./.claude-plugin/icon.png",
         "defaultPrompt": [
-          "What's Jokić averaging this season?",
+          "What's Cooper Flagg averaging this season?",
           "Who leads the league in steals among guards?",
           "Help me set up my league's fantasy scoring."
         ]
