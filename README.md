@@ -38,6 +38,18 @@ Just ask a question. The first time, there's no data yet, so Claude calls `refre
 - "Refresh the NBA data" to pick up the latest games.
 - "Load the 2023-24 season" to add an older season. Each season only needs loading once.
 
+### Example: an early-season dashboard
+
+![Early-season NBA dashboard: stat leader cards for points, rebounds, assists, threes, blocks and steals, above a bar chart of the top 10 scorers led by Luka Dončić at 39.3 points per game](docs/dashboard.png)
+
+[**NBA 2026-27 Early Season Dashboard**](https://claude.ai/artifact/K9uYRxzHexKuqtPWM4D675) was built in Cowork from Hoops Stats data on November 10, 2026. It shows:
+
+- League leaders per game in points, rebounds, assists, threes, blocks, steals and true shooting.
+- Season lines for Luka Dončić, Victor Wembanyama and Cooper Flagg.
+- Points per game, point differential and 3P% for all 30 teams.
+
+It's a snapshot from that date and doesn't update. Ask Claude for a dashboard like it once the plugin is installed, and it builds one from your current data.
+
 ## What it runs, sends, and stores
 
 - **Runs:** a local Python MCP server, started with `uv run`. On first start, uv downloads Python and the packages pinned in `server/uv.lock` from PyPI.
