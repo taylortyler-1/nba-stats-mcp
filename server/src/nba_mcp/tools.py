@@ -27,7 +27,7 @@ from typing import Any, Literal
 import duckdb
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .db import STAT_COLUMNS
+from .db import STAT_COLUMNS, has_table
 
 SeasonType = Literal["Regular Season", "Playoffs"]
 PerMode = Literal["totals", "per_game", "per_36"]
@@ -461,6 +461,102 @@ def _player_list(rows: list[tuple[Any, ...]]) -> str:
     return ", ".join(f"{name} ({team}, id {pid})" for pid, name, team in rows)
 
 
+# --------------------------------------------------------------------------- positions
+
+# stats.nba.com lists positions as G, F, C, or a primary-first combo like 'G-F'.
+POSITIONS = {"G": "Guard", "F": "Forward", "C": "Center"}
+_POSITION_WORDS = {
+    "g": "G",
+    "guard": "G",
+    "guards": "G",
+    "f": "F",
+    "forward": "F",
+    "forwards": "F",
+    "c": "C",
+    "center": "C",
+    "centers": "C",
+    "centre": "C",
+    "centres": "C",
+}
+_TOO_SPECIFIC = {
+    "pg": "G",
+    "point guard": "G",
+    "point guards": "G",
+    "sg": "G",
+    "shooting guard": "G",
+    "shooting guards": "G",
+    "sf": "F",
+    "small forward": "F",
+    "small forwards": "F",
+    "pf": "F",
+    "power forward": "F",
+    "power forwards": "F",
+}
+_COMBO_RE = re.compile(r"^([GFC])\s*[-/]\s*([GFC])$")
+
+NO_POSITIONS = "Player positions aren't loaded yet. Call refresh_data to download them, then retry."
+
+
+@dataclass(frozen=True)
+class PositionFilter:
+    """Single positions match any listing containing them ('G' matches G, G-F, F-G);
+    combos match that exact listing ('G-F' matches G-F only)."""
+
+    any_of: tuple[str, ...]
+    exact: tuple[str, ...]
+
+    def sql(self, col: str = "position") -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if self.any_of:
+            clauses.append(f"list_has_any(string_split({col}, '-'), ?)")
+            params.append(list(self.any_of))
+        if self.exact:
+            clauses.append(f"{col} IN ({', '.join('?' * len(self.exact))})")
+            params += list(self.exact)
+        return "(" + " OR ".join(clauses) + ")", params
+
+    def out(self) -> list[str]:
+        return [*self.any_of, *self.exact]
+
+
+def parse_positions(position: str | list[str]) -> PositionFilter:
+    any_of: list[str] = []
+    exact: list[str] = []
+    for raw in _names(position):
+        key = _norm_key(raw)
+        if key in _POSITION_WORDS:
+            p = _POSITION_WORDS[key]
+            if p not in any_of:
+                any_of.append(p)
+            continue
+        if key in _TOO_SPECIFIC:
+            raise ToolError(
+                f"{raw!r} is more specific than the NBA's listings, which are only G, F, C "
+                f"and combos like G-F. Use position='{_TOO_SPECIFIC[key]}' and tell the user "
+                "the results include every player listed at that position."
+            )
+        m = _COMBO_RE.match(raw.strip().upper())
+        if m and m.group(1) != m.group(2):
+            combo = f"{m.group(1)}-{m.group(2)}"
+            if combo not in exact:
+                exact.append(combo)
+            continue
+        raise ToolError(
+            f"Unknown position {raw!r}. Use G, F or C (or guard / forward / center), "
+            "or an exact combo like 'G-F'."
+        )
+    if not any_of and not exact:
+        raise ToolError("position is empty; use G, F or C.")
+    return PositionFilter(tuple(any_of), tuple(exact))
+
+
+def positions_loaded(con: duckdb.DuckDBPyConnection) -> bool:
+    return has_table(con, "players") and bool(
+        _scalar(con, "SELECT COUNT(*) FROM players WHERE position IS NOT NULL")
+    )
+
+
 # --------------------------------------------------------------------------- fantasy scoring
 
 DEFAULT_PROFILE = "default"
@@ -617,10 +713,7 @@ def scoring_profiles(
     con: duckdb.DuckDBPyConnection | None,
 ) -> dict[str, dict[str, float]]:
     """Saved scoring profiles by name. Databases created before profiles existed have none."""
-    if con is None or not _scalar(
-        con,
-        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'fantasy_scoring'",
-    ):
+    if con is None or not has_table(con, "fantasy_scoring"):
         return {}
     return {
         name: json.loads(weights)
@@ -922,6 +1015,11 @@ def list_stats(
             "notes": "dd/td are per-game bonuses (10+ in two/three of pts, reb, ast, stl, blk); "
             "a triple-double also earns the dd bonus.",
         },
+        "positions": {
+            "values": POSITIONS,
+            "loaded": con is not None and positions_loaded(con),
+            "notes": "get_leaders' position filter. Combos like G-F exist; 'G' includes them.",
+        },
         "data": coverage(con)
         if con is not None
         else "No data loaded yet; call refresh_data to download it.",
@@ -1170,10 +1268,19 @@ def get_leaders(
     order: Literal["desc", "asc"] = "desc",
     teammates_out: str | list[str] | None = None,
     scoring: str | Mapping[str, Any] | None = None,
+    position: str | list[str] | None = None,
 ) -> dict[str, Any]:
     resolved = resolve_stats(stat)
     if len(resolved) != 1:
         raise ToolError("get_leaders ranks one stat at a time.")
+    pos_filter = parse_positions(position) if position else None
+    if pos_filter and entity == "team":
+        raise ToolError(
+            "position filters a player leaderboard; omit it when entity='team'."
+        )
+    has_positions = positions_loaded(con)
+    if pos_filter and not has_positions:
+        raise ToolError(NO_POSITIONS)
     s = resolved[0]
     if scoring is not None and s is not FPTS:
         raise ToolError("scoring applies only to stat='fpts'.")
@@ -1195,14 +1302,26 @@ def get_leaders(
     where, params = _where(
         seasons, season_type, table=table, team_id=team_id, teammates_out=out
     )
+    if pos_filter:
+        pos_sql, pos_params = pos_filter.sql("pl.position")
+        where += (
+            f" AND player_id IN (SELECT pl.player_id FROM players pl WHERE {pos_sql})"
+        )
+        params += pos_params
 
     if entity == "player":
+        pos_col = (
+            "(SELECT pl.position FROM players pl WHERE pl.player_id = g.id)"
+            if has_positions
+            else "NULL"
+        )
         group_sql = f"""
             SELECT player_id AS id, arg_max(player_name, game_date) AS name,
                    string_agg(DISTINCT team_abbreviation, '/' ORDER BY team_abbreviation) AS team,
                    COUNT(*) AS gp, {_sums_sql(fantasy)}
             FROM player_games WHERE {where} GROUP BY player_id
         """
+        group_sql = f"SELECT g.*, {pos_col} AS position FROM ({group_sql}) g"
     else:
         group_sql = f"""
             SELECT team_id AS id, arg_max(team_abbreviation, game_date) AS name, NULL AS team,
@@ -1267,6 +1386,8 @@ def get_leaders(
         if entity == "player":
             entry["player"] = {"id": r["id"], "name": r["name"]}
             entry["team"] = r["team"]
+            if has_positions:
+                entry["position"] = r["position"]
         else:
             entry["team"] = r["name"]
         entry |= {"games_played": r["gp"], "value": v}
@@ -1285,6 +1406,12 @@ def get_leaders(
         result["scoring"] = fantasy.out()
     if team_obj:
         result["team_filter"] = team_obj.abbreviation
+    if pos_filter:
+        result["position_filter"] = pos_filter.out()
+        result["position_note"] = (
+            "Positions are the NBA's current listing (G, F, C or combos like G-F). "
+            "A single position includes combos: 'G' also matches G-F and F-G."
+        )
     if out:
         result["teammates_out"] = [p.name for p in out]
         result["teammate_note"] = (

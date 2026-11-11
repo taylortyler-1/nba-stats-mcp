@@ -2,7 +2,7 @@ import anyio
 import pandas as pd
 import pytest
 from mcp import Client
-from test_tools import TEAMS, player_row, team_row
+from test_tools import PLAYER_INDEX, TEAMS, player_row, team_row
 
 from nba_mcp import db, ingest, server
 
@@ -63,8 +63,13 @@ def fake_nba(tmp_path, monkeypatch):
             pd.DataFrame(rows), entity, season, season_type
         )
 
+    def fetch_players():
+        calls.append(("players",))
+        return ingest.transform_player_index(pd.DataFrame(PLAYER_INDEX))
+
     monkeypatch.setattr(ingest, "load_teams", load_teams)
     monkeypatch.setattr(ingest, "fetch_slice", fetch_slice)
+    monkeypatch.setattr(ingest, "fetch_players", fetch_players)
     return calls
 
 
@@ -100,12 +105,33 @@ def test_refresh_loads_current_season_then_queries_work(fake_nba):
     }
     assert out["refreshed"]["2025-26"]["Playoffs"] == {"team_rows": 0, "player_rows": 0}
     assert out["data"]["data_through"] == "2025-11-03"
-    assert len(fake_nba) == 4
-    assert progress[-1][:2] == (4, 4)
+    assert out["positions"] == {"players": len(PLAYER_INDEX)}
+    assert len(fake_nba) == 5 and fake_nba[-1] == ("players",)
+    assert progress[-1][:2] == (5, 5)
 
     r = call("get_stat", {"stat": "pts", "player": "Jokic"})
     assert not r.is_error, text(r)
     assert r.structured_content["stats"]["pts"]["value"] == 25.0
+
+    r = call("get_leaders", {"stat": "pts", "position": "C"})
+    assert not r.is_error, text(r)
+    assert r.structured_content["leaders"][0]["position"] == "C"
+
+
+def test_position_download_failure_keeps_games(fake_nba, monkeypatch):
+    def boom():
+        raise ConnectionError("timed out")
+
+    monkeypatch.setattr(ingest, "fetch_players", boom)
+    r = call("refresh_data")
+    assert not r.is_error, text(r)
+    assert "timed out" in r.structured_content["positions"]["error"]
+    assert (
+        r.structured_content["refreshed"]["2025-26"]["Regular Season"]["player_rows"]
+        == 2
+    )
+    r = call("get_leaders", {"stat": "pts", "position": "C"})
+    assert r.is_error and "refresh_data" in text(r)
 
 
 def test_refresh_rejects_future_and_bad_seasons(fake_nba):

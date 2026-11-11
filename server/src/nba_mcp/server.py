@@ -311,11 +311,20 @@ def get_leaders(
         ),
     ] = None,
     scoring: ScoringArg = None,
+    position: Annotated[
+        str | list[str] | None,
+        Field(
+            description="Rank only players at these positions: 'G', 'F', 'C' (or 'guards' etc.). "
+            "A single position includes combo listings ('G' matches G-F and F-G); a combo like "
+            "'G-F' matches only that listing. The NBA doesn't distinguish PG/SG or SF/PF."
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Rank players or teams by one stat. Use stat='fpts' for a fantasy leaderboard.
 
     Players must meet qualification minimums (games played, and attempts for percentages);
     the result states the thresholds used. Use min_games to loosen or tighten them.
+    Use position for questions like "top steals among guards".
     """
     return _with_db(
         tools.get_leaders,
@@ -330,6 +339,7 @@ def get_leaders(
         order=order,
         teammates_out=teammates_out,
         scoring=scoring,
+        position=position,
     )
 
 
@@ -407,13 +417,14 @@ async def refresh_data(
     async with _refresh_lock:
         targets = _refresh_targets(seasons)
         slices = ingest.plan(targets, list(ingest.SEASON_TYPES))
+        steps = len(slices) + 1  # + player positions
         started = time.monotonic()
         loaded: dict[str, dict[str, dict[str, int]]] = {}
         try:
             await anyio.to_thread.run_sync(ingest.store_teams)
             for i, (entity, season, season_type) in enumerate(slices):
                 await ctx.report_progress(
-                    i, len(slices), f"Downloading {season} {season_type} {entity} games"
+                    i, steps, f"Downloading {season} {season_type} {entity} games"
                 )
                 df = await anyio.to_thread.run_sync(
                     ingest.fetch_slice, entity, season, season_type
@@ -424,8 +435,7 @@ async def refresh_data(
                 loaded.setdefault(season, {}).setdefault(season_type, {})[
                     f"{entity}_rows"
                 ] = n
-                if i < len(slices) - 1:
-                    await anyio.sleep(REFRESH_PAUSE)
+                await anyio.sleep(REFRESH_PAUSE)
         except db.DatabaseBusy:
             raise ToolError(
                 "Couldn't get write access to the database; another update may be running."
@@ -437,10 +447,27 @@ async def refresh_data(
                     error=f"{type(exc).__name__}: {exc}", saved=saved
                 )
             ) from exc
-        await ctx.report_progress(len(slices), len(slices), "Done")
+
+        # Positions only power the get_leaders position filter, so a failure here
+        # keeps the games just downloaded (and any previously saved positions).
+        await ctx.report_progress(len(slices), steps, "Downloading player positions")
+        positions: dict[str, Any]
+        try:
+            df = await anyio.to_thread.run_sync(ingest.fetch_players)
+            positions = {
+                "players": await anyio.to_thread.run_sync(ingest.store_players, df)
+            }
+        except Exception as exc:  # noqa: BLE001 -- nba_api network errors vary; keep the games
+            positions = {
+                "error": f"{type(exc).__name__}: {exc}",
+                "note": "Game data was saved. Position filters use previously saved "
+                "positions, if any; refresh again later to update them.",
+            }
+        await ctx.report_progress(steps, steps, "Done")
 
     return {
         "refreshed": loaded,
+        "positions": positions,
         "elapsed_seconds": round(time.monotonic() - started, 1),
         "data": _with_db(tools.coverage),
     }

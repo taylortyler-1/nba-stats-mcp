@@ -123,6 +123,41 @@ def load_teams(con: duckdb.DuckDBPyConnection) -> None:
     con.unregister("incoming_teams")
 
 
+def transform_player_index(raw: pd.DataFrame) -> pd.DataFrame:
+    """Shape a PlayerIndex result into the players table's columns."""
+    if raw.empty:
+        return pd.DataFrame(columns=["player_id", "name", "position"])
+    position = raw["POSITION"].astype("string").str.strip().str.upper()
+    out = pd.DataFrame(
+        {
+            "player_id": raw["PERSON_ID"].astype("int64"),
+            "name": (
+                raw["PLAYER_FIRST_NAME"].fillna("").astype(str)
+                + " "
+                + raw["PLAYER_LAST_NAME"].fillna("").astype(str)
+            ).str.strip(),
+            "position": position.where(position.fillna("") != "", None),
+        }
+    )
+    return out.drop_duplicates("player_id", keep="last")
+
+
+def replace_players(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """Replace the players table with `df`."""
+    con.execute("BEGIN")
+    try:
+        con.execute("DELETE FROM players")
+        if not df.empty:
+            con.register("incoming_players", df)
+            con.execute("INSERT INTO players BY NAME SELECT * FROM incoming_players")
+            con.unregister("incoming_players")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return len(df)
+
+
 # A season's game log normally arrives in under a second. stats.nba.com stalls, rather
 # than refusing, requests it blocks (VPNs, cloud servers), so keep the wait short: a
 # blocked request fails in ~35s, inside the ~60-80s limit some clients put on a tool call.
@@ -157,6 +192,27 @@ def fetch_game_log(
             )
             time.sleep(wait)
     raise AssertionError("unreachable")
+
+
+def fetch_players() -> pd.DataFrame:
+    """Download every player's listed position. One request covers all seasons.
+
+    Historical=1 includes players no longer on a roster, so older loaded seasons
+    and mid-season departures get positions too.
+    """
+    from nba_api.stats.endpoints import playerindex
+
+    raw = playerindex.PlayerIndex(
+        season=current_season(),
+        historical_nullable="1",
+        timeout=REQUEST_TIMEOUT,
+    ).get_data_frames()[0]
+    return transform_player_index(raw)
+
+
+def store_players(df: pd.DataFrame) -> int:
+    with write_connection() as con:
+        return replace_players(con, df)
 
 
 @contextmanager
@@ -206,6 +262,7 @@ def ingest(seasons: list[str], season_types: list[str], pause: float = 1.0) -> N
         )
         log.info("%s %s %s: %d rows", season, season_type, entity, n)
         time.sleep(pause)  # be polite to stats.nba.com
+    log.info("player positions: %d players", store_players(fetch_players()))
 
 
 def main(argv: list[str] | None = None) -> None:

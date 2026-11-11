@@ -234,7 +234,28 @@ def db_file(tmp_path):
         for entity, raw in (("player", players), ("team", teams)):
             df = ingest.transform_game_log(raw, entity, "2025-26", "Regular Season")
             ingest.replace_games(w, entity, "2025-26", "Regular Season", df)
+        ingest.replace_players(
+            w, ingest.transform_player_index(pd.DataFrame(PLAYER_INDEX))
+        )
     return path
+
+
+def index_row(pid, first, last, position):
+    return {
+        "PERSON_ID": pid,
+        "PLAYER_FIRST_NAME": first,
+        "PLAYER_LAST_NAME": last,
+        "POSITION": position,
+    }
+
+
+PLAYER_INDEX = [
+    index_row(1, "Nikola", "Jokić", "C"),
+    index_row(2, "Stephen", "Curry", "G"),
+    index_row(3, "Seth", "Curry", "G-F"),
+    index_row(4, "Austin", "Reaves", "F-G"),
+    index_row(99, "Retired", "Player", None),
+]
 
 
 @pytest.fixture
@@ -515,3 +536,58 @@ def test_leaders_without_teammate(con):
     # LAL played 2 games without Reaves -> min_games 1; Reaves himself is excluded.
     assert r["qualification"]["min_games"] == 1
     assert [(e["player"]["id"], e["value"]) for e in r["leaders"]] == [(1, 51.7)]
+
+
+# --------------------------------------------------------------------------- positions
+
+
+def test_player_index_transform():
+    df = ingest.transform_player_index(pd.DataFrame(PLAYER_INDEX))
+    assert df.set_index("player_id")["position"].to_dict()[3] == "G-F"
+    assert df.set_index("player_id")["position"].isna().to_dict()[99]
+    assert df.set_index("player_id")["name"][1] == "Nikola Jokić"
+
+
+def test_leaders_by_position(con):
+    def ids(**kw):
+        r = tools.get_leaders(con, "pts", min_games=1, **kw)
+        return [e["player"]["id"] for e in r["leaders"]]
+
+    # Points order is Stephen (G), Jokić (C), Reaves (F-G), Seth (G-F).
+    assert ids() == [2, 1, 4, 3]
+    # A single position includes combos either way round.
+    assert ids(position="G") == [2, 4, 3]
+    assert ids(position="guards") == [2, 4, 3]
+    assert ids(position="F") == [4, 3]
+    # Exact combos match only that listing.
+    assert ids(position="G-F") == [3]
+    assert ids(position="g/f") == [3]
+    assert ids(position=["C", "G-F"]) == [1, 3]
+    assert ids(position="C,G") == [2, 1, 4, 3]
+
+    r = tools.get_leaders(con, "stl", min_games=1, position="center")
+    assert r["position_filter"] == ["C"] and "position_note" in r
+    assert r["leaders"][0]["position"] == "C"
+    assert tools.get_leaders(con, "pts")["leaders"][0]["position"] == "C"
+
+
+def test_position_errors(con):
+    with pytest.raises(ToolError, match="more specific.*position='G'"):
+        tools.get_leaders(con, "ast", position="PG")
+    with pytest.raises(ToolError, match="Unknown position"):
+        tools.get_leaders(con, "ast", position="wing")
+    with pytest.raises(ToolError, match="Unknown position"):
+        tools.get_leaders(con, "ast", position="G-G")
+    with pytest.raises(ToolError, match="entity='team'"):
+        tools.get_leaders(con, "ast", entity="team", position="G")
+
+
+def test_database_without_positions(db_file):
+    with db.connect(read_only=False, path=db_file) as w:
+        w.execute("DROP TABLE players")
+    with db.connect(read_only=True, path=db_file) as r:
+        leaders = tools.get_leaders(r, "pts", min_games=1)["leaders"]
+        assert "position" not in leaders[0]
+        assert tools.list_stats(r)["positions"]["loaded"] is False
+        with pytest.raises(ToolError, match="refresh_data"):
+            tools.get_leaders(r, "pts", position="G")

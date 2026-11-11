@@ -73,6 +73,14 @@ CREATE TABLE IF NOT EXISTS team_games (
     PRIMARY KEY (game_id, team_id)
 );
 
+-- One row per player from stats.nba.com's player index; replaced on each refresh.
+-- position is the NBA's listing: G, F, C, or a combo like 'G-F' (primary first).
+CREATE TABLE IF NOT EXISTS players (
+    player_id BIGINT PRIMARY KEY,
+    name      VARCHAR NOT NULL,
+    position  VARCHAR
+);
+
 CREATE TABLE IF NOT EXISTS ingest_log (
     entity      VARCHAR NOT NULL,  -- 'player' | 'team'
     season      VARCHAR NOT NULL,
@@ -98,6 +106,14 @@ def db_path() -> Path:
 
 def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(SCHEMA)
+
+
+def has_table(con: duckdb.DuckDBPyConnection, name: str) -> bool:
+    """Whether a table exists; databases created by older versions may lack newer tables."""
+    row = con.execute(
+        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = ?", [name]
+    ).fetchone()
+    return bool(row and row[0])
 
 
 class DatabaseBusy(RuntimeError):
