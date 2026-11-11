@@ -1,0 +1,6 @@
+.vscode/
+server/.pytest_cache
+server/.ruff_cache
+server/.venv
+__pycache__/
+.DS_Store
