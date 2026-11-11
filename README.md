@@ -10,7 +10,7 @@ The plugin adds an MCP server with these tools and a skill that teaches Claude h
 | --- | --- |
 | `get_stat` | One player's or team's stats, filtered by season, playoffs, last N games, opponent, or which teammates played, as per-game, totals, or per-36 |
 | `get_game_log` | Game-by-game lines, best games by any stat, and best-N-games-per-week summaries |
-| `get_leaders` | Rank players or teams by a stat, including fantasy points, with minimums so small samples don't top the list |
+| `get_leaders` | Rank players or teams by a stat, including fantasy points, optionally by position, with minimums so small samples don't top the list |
 | `save_fantasy_scoring` / `delete_fantasy_scoring` | Save your league's points per stat so `fpts` (fantasy points) works in every tool |
 | `list_stats` | Available stats, saved scoring, loaded seasons, and the date of the most recent game |
 | `refresh_data` | Download the latest games from stats.nba.com |
@@ -57,7 +57,7 @@ It's a snapshot from that date and doesn't update. Ask Claude for a dashboard li
 ## What it runs, sends, and stores
 
 - **Runs:** a local Python MCP server, started with `uv run`. On first start, uv downloads Python and the packages pinned in `server/uv.lock` from PyPI.
-- **Fetches:** game logs from stats.nba.com, only when `refresh_data` runs. Requests contain only the season and season type being downloaded.
+- **Fetches:** game logs and the player index (for positions) from stats.nba.com, only when `refresh_data` runs. Requests contain only the season and season type being downloaded.
 - **Sends:** nothing else. The plugin sends nothing to any other service, and nothing about you or your questions is sent anywhere.
 - **Stores:** a DuckDB database at `~/.local/share/nba-mcp/nba.duckdb`, a few tens of MB per season. Set the `NBA_MCP_DB` environment variable to store it elsewhere, or delete the file to remove the data.
 

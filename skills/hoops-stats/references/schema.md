@@ -58,6 +58,10 @@ Current franchises: one row each. Primary key: `team_id`.
 | `nickname` | `Mavericks` |
 | `city` | `Dallas` |
 
+### `players`
+
+Every player in stats.nba.com's player index, current and historical, replaced on each `refresh_data`. Columns: `player_id` (primary key, same id as `player_games`), `name`, `position` (`G`, `F`, `C`, or a combo like `G-F` with the primary position first; `NULL` for a few old players). It's the player's **current** listing, not a per-season one. Databases created before this table existed get it on the next refresh.
+
 ### `ingest_log`
 
 One row per `(entity, season, season_type)` that has been downloaded. Columns: `entity` (`'player'` or `'team'`), `season`, `season_type`, `row_count`, `loaded_at` (timestamp of the last download).

@@ -132,6 +132,7 @@ Counting stats are whole numbers per game; `min` and `fpts` have 1 decimal. `mat
 | `order` | `"desc"` | `"asc"` for lowest first (fewest turnovers, worst FT%). |
 | `teammates_out` | None | Players only: rank those players' teammates over just the games they missed ("who benefits when X sits"). The games minimum scales to those games. |
 | `scoring` | Saved default | Only with `stat="fpts"`. |
+| `position` | None | Players only: `"G"`, `"F"`, `"C"` (or `"guards"`, `"forward"`, ...), a list, or a comma-separated string. A single position includes combo listings, so `"G"` matches G, G-F and F-G. A combo like `"G-F"` matches only that exact listing. The NBA doesn't list PG/SG/SF/PF, so those return an error. |
 
 Returns:
 
@@ -144,11 +145,13 @@ Returns:
   "qualification": {"min_games": 7, "min_fg3a_per_game": 2},
   "qualified_count": 148,
   "leaders": [
-    {"rank": 1, "player": {"id": 1, "name": "..."}, "team": "DAL/LAL", "games_played": 12, "value": 0.452}
+    {"rank": 1, "player": {"id": 1, "name": "..."}, "team": "DAL/LAL", "position": "G-F", "games_played": 12, "value": 0.452}
   ]
 }
 ```
 
+- `position` in a player entry is the NBA's current listing (`null` if it has none). It appears once positions have been downloaded.
+- With the `position` filter, the result adds `position_filter` (for example `["G"]`) and a `position_note`. Mention to the user that combo players such as G-F are included.
 - `team` in a player entry lists every team the player appeared for in scope, joined with `/`.
 - For `entity="team"`, entries are `{"rank", "team": "LAL", "games_played", "value"}`, and teams have no qualification minimums.
 - Ties share a rank (1, 1, 3).
@@ -170,7 +173,7 @@ Downloads game logs from stats.nba.com and replaces those seasons in the local d
 | --- | --- |
 | `seasons` | Optional list like `["2023-24", "2024-25"]`, at most 5 per call. Default: the current season only. Future seasons are rejected. |
 
-Each season loads both Regular Season and Playoffs: 4 requests with a 1-second pause between them, usually a few seconds per season. stats.nba.com blocks most VPNs and cloud servers by stalling; a blocked request fails after about 35 seconds. The tool reports progress while it runs. Other tools keep working, apart from a brief "being updated" window while each part is saved.
+Each season loads both Regular Season and Playoffs: 4 requests with a 1-second pause between them, usually a few seconds per season. One more request then downloads every player's listed position, for the `get_leaders` position filter. If only that request fails, the games are still saved and the result's `positions` has an `error`. stats.nba.com blocks most VPNs and cloud servers by stalling; a blocked request fails after about 35 seconds. The tool reports progress while it runs. Other tools keep working, apart from a brief "being updated" window while each part is saved.
 
 Returns:
 
@@ -178,6 +181,7 @@ Returns:
 {
   "refreshed": {"2025-26": {"Regular Season": {"team_rows": 340, "player_rows": 3712},
                             "Playoffs": {"team_rows": 0, "player_rows": 0}}},
+  "positions": {"players": 5197},
   "elapsed_seconds": 18.4,
   "data": {"seasons": {"...": []}, "data_through": "2025-11-09"}
 }
@@ -222,3 +226,6 @@ The name returned is the most recent name in the data.
 | `Unknown scoring stat` / `is a percentage` | Fix the weight key; percentages can't be weighted, use makes and misses. |
 | `scoring applies only to stat='fpts'` | Drop `scoring`, or rank `fpts`. |
 | `can't be their own teammate filter` | Remove the subject player from `teammates_out` / `teammates_in`. |
+| `Player positions aren't loaded yet` | Call `refresh_data` (it downloads positions too), then retry. |
+| `more specific than the NBA's listings` | Use the suggested `G` or `F`, and tell the user point/shooting guards (or small/power forwards) aren't distinguished. |
+| `Unknown position` | Use `G`, `F`, `C`, or an exact combo like `G-F`. |

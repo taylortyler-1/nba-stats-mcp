@@ -14,7 +14,7 @@ The hoops-stats MCP server answers questions from a local database of NBA **box 
 | `list_stats` | Stat names, which seasons are loaded, and `data_through` (date of the latest game). Cheap — call it when unsure. |
 | `get_stat` | One player's or one team's numbers. Several stats at once: `stat=["pts","reb","ast"]`. |
 | `get_game_log` | Game-by-game lines. Best games: `sort_by="fpts"` (or any stat). Lock-in / best-N leagues: `best_n_per_week=N`. |
-| `get_leaders` | Rank players or teams by one stat. `stat="fpts"` for a fantasy leaderboard. |
+| `get_leaders` | Rank players or teams by one stat. `stat="fpts"` for a fantasy leaderboard; `position="G"` (or F, C) for "top steals among guards". |
 | `save_fantasy_scoring` | Save the user's league scoring (points per stat) so `fpts` works from then on. |
 | `delete_fantasy_scoring` | Remove a saved scoring profile, only when asked. |
 | `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes a few seconds per season. Fails if the user is on a VPN. |
