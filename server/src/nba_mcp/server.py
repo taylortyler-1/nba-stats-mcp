@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from . import db, ingest, tools
+from . import db, fantasy, ingest, resolve, stats, tools
 
 mcp = MCPServer(
     name="hoops-stats",
@@ -110,11 +110,11 @@ SeasonArg = Annotated[
     ),
 ]
 SeasonTypeArg = Annotated[
-    tools.SeasonType,
+    db.SeasonType,
     Field(description="Default: 'Regular Season'."),
 ]
 PerModeArg = Annotated[
-    tools.PerMode,
+    stats.PerMode,
     Field(
         description="How counting stats are expressed. per_36 is players only. per_100 is per 100 "
         "possessions (for a player, possessions while on court). Ignored for percentages and ratios."
@@ -155,7 +155,7 @@ def list_stats(
         str | None,
         Field(
             description="Filter to one category: "
-            + ", ".join(repr(c) for c in tools.CATEGORIES)
+            + ", ".join(repr(c) for c in stats.CATEGORIES)
             + "."
         ),
     ] = None,
@@ -291,7 +291,7 @@ def get_leaders(
     season_type: SeasonTypeArg = "Regular Season",
     per_mode: PerModeArg = "per_game",
     entity: Annotated[
-        tools.Entity, Field(description="Rank players or teams.")
+        db.Entity, Field(description="Rank players or teams.")
     ] = "player",
     team: Annotated[
         str | None, Field(description="Rank only this team's players.")
@@ -364,14 +364,14 @@ def save_fantasy_scoring(
         Field(
             description="Profile name. 'default' is used whenever scoring isn't passed."
         ),
-    ] = tools.DEFAULT_PROFILE,
+    ] = fantasy.DEFAULT_PROFILE,
 ) -> dict[str, Any]:
     """Save the user's fantasy league scoring so 'fpts' works in later calls and conversations.
 
     Ask the user for their league's scoring settings first; don't guess them. Saving a
     name that exists replaces it. Saved profiles are listed by list_stats.
     """
-    return _with_write_db(tools.save_fantasy_scoring, weights, name)
+    return _with_write_db(fantasy.save_fantasy_scoring, weights, name)
 
 
 @mcp.tool(annotations=DELETE_LOCAL)
@@ -379,14 +379,14 @@ def delete_fantasy_scoring(
     name: Annotated[str, Field(description="Profile name to delete.")],
 ) -> dict[str, Any]:
     """Delete a saved fantasy scoring profile. Only when the user asks."""
-    return _with_write_db(tools.delete_fantasy_scoring, name)
+    return _with_write_db(fantasy.delete_fantasy_scoring, name)
 
 
 def _refresh_targets(seasons: list[str] | None) -> list[str]:
     current = ingest.current_season()
     if not seasons:
         return [current]
-    targets = sorted({tools.normalize_season(s) for s in seasons})
+    targets = sorted({resolve.normalize_season(s) for s in seasons})
     future = [s for s in targets if s > current]
     if future:
         raise ToolError(
@@ -475,5 +475,5 @@ async def refresh_data(
         "refreshed": loaded,
         "positions": positions,
         "elapsed_seconds": round(time.monotonic() - started, 1),
-        "data": _with_db(tools.coverage),
+        "data": _with_db(resolve.coverage),
     }

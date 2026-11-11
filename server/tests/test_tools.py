@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from nba_mcp import db, ingest, tools
+from nba_mcp import db, fantasy, ingest, stats, tools
 
 TEAMS = [
     (1610612738, "BOS", "Boston Celtics", "Celtics", "Boston"),
@@ -358,7 +358,7 @@ def test_team_leaders_and_list_stats(con):
     assert [e["team"] for e in r["leaders"]] == ["LAL", "BOS", "GSW"]
     listed = tools.list_stats(con)
     assert listed["data"]["seasons"] == {"Regular Season": ["2025-26"]}
-    assert {s["name"] for s in listed["stats"]} == {*tools.STATS, "fpts"}
+    assert {s["name"] for s in listed["stats"]} == {*stats.STATS, "fpts"}
     assert listed["fantasy"]["saved_profiles"] == {}
 
 
@@ -369,20 +369,20 @@ YAHOO = {"pts": 1, "reb": 1.2, "ast": 1.5, "stl": 3, "blk": 3, "tov": -1}
 
 
 def test_parse_weights_aliases_and_errors():
-    assert tools.parse_weights(
+    assert fantasy.parse_weights(
         {"points": 1, "Rebounds": 1.2, "double double": 2, "FG missed": -0.5, "blk": 0}
     ) == {"pts": 1.0, "reb": 1.2, "dd": 2.0, "fgmi": -0.5}
-    assert tools.parse_weights('{"pts": 1}') == {"pts": 1.0}
+    assert fantasy.parse_weights('{"pts": 1}') == {"pts": 1.0}
     with pytest.raises(ToolError, match="percentage"):
-        tools.parse_weights({"fg%": 1})
+        fantasy.parse_weights({"fg%": 1})
     with pytest.raises(ToolError, match="Did you mean: pts"):
-        tools.parse_weights({"ptz": 1})
+        fantasy.parse_weights({"ptz": 1})
     with pytest.raises(ToolError, match="must be a number"):
-        tools.parse_weights({"pts": "lots"})
+        fantasy.parse_weights({"pts": "lots"})
     with pytest.raises(ToolError, match="repeats"):
-        tools.parse_weights({"pts": 1, "points": 2})
+        fantasy.parse_weights({"pts": 1, "points": 2})
     with pytest.raises(ToolError, match="non-empty"):
-        tools.parse_weights({})
+        fantasy.parse_weights({})
 
 
 def test_fantasy_points_inline(con):
@@ -412,12 +412,12 @@ def test_fpts_without_scoring_asks_for_it(con):
 
 def test_saved_profiles(db_file):
     with db.connect(read_only=False, path=db_file) as w:
-        saved = tools.save_fantasy_scoring(w, {"points": 1, "rebounds": 1.2})
+        saved = fantasy.save_fantasy_scoring(w, {"points": 1, "rebounds": 1.2})
         assert saved["saved"] == "default" and saved["weights"] == {
             "pts": 1.0,
             "reb": 1.2,
         }
-        tools.save_fantasy_scoring(w, YAHOO, name="Yahoo League")
+        fantasy.save_fantasy_scoring(w, YAHOO, name="Yahoo League")
     with db.connect(read_only=True, path=db_file) as r:
         assert (
             tools.get_stat(r, "fpts", player="Jokic")["scoring"]["profile"] == "default"
@@ -431,7 +431,7 @@ def test_saved_profiles(db_file):
         with pytest.raises(ToolError, match="No fantasy scoring profile named 'espn'"):
             tools.get_stat(r, "fpts", player="Jokic", scoring="espn")
     with db.connect(read_only=False, path=db_file) as w:
-        tools.delete_fantasy_scoring(w, "default")
+        fantasy.delete_fantasy_scoring(w, "default")
     with db.connect(read_only=True, path=db_file) as r:
         # The only profile left is used by default.
         assert (

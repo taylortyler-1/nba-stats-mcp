@@ -6,7 +6,7 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 import duckdb
 
@@ -116,12 +116,24 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(SCHEMA)
 
 
+def scalar(
+    con: duckdb.DuckDBPyConnection, sql: str, params: list[Any] | None = None
+) -> Any:
+    """First column of the first row, or None if the query returns no rows."""
+    row = con.execute(sql, params or []).fetchone()
+    return row[0] if row else None
+
+
+def rows_as_dicts(cur: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 def has_table(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     """Whether a table exists; databases created by older versions may lack newer tables."""
-    row = con.execute(
-        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = ?", [name]
-    ).fetchone()
-    return bool(row and row[0])
+    return bool(
+        scalar(con, "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = ?", [name])
+    )
 
 
 class DatabaseBusy(RuntimeError):
