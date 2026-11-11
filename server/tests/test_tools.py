@@ -677,3 +677,142 @@ def test_per_100_possessions(con):
         ("GSW", round(115 * 100 / 85, 1)),
         ("LAL", round(335 * 100 / 261, 1)),
     ]
+
+
+# --------------------------------------------------------------------------- error precedence, result shape
+
+
+def test_error_precedence(con):
+    """When a call has several problems, the checks report in a fixed order."""
+    with pytest.raises(ToolError, match="Unknown stat"):
+        tools.get_stat(con, "zz", per_mode="per_36", last_n_games=0)
+    with pytest.raises(ToolError, match="Pass a player or a team"):
+        tools.get_stat(con, "pts", per_mode="per_36", last_n_games=0)
+    with pytest.raises(ToolError, match="players only"):
+        tools.get_stat(con, "pts", team="LAL", per_mode="per_36", last_n_games=0)
+    with pytest.raises(ToolError, match="last_n_games"):
+        tools.get_stat(con, "fpts", player="Nobody", last_n_games=0)
+    with pytest.raises(ToolError, match="No fantasy scoring"):
+        tools.get_stat(con, "fpts", player="Nobody", season="2019-20")
+    with pytest.raises(ToolError, match="isn't loaded"):
+        tools.get_stat(con, "pts", player="Nobody", season="2019-20")
+    with pytest.raises(ToolError, match="No player matching"):
+        tools.get_stat(con, "pts", player="Nobody", opponent="zzz")
+
+    with pytest.raises(ToolError, match="last_n_games"):
+        tools.get_game_log(con, last_n_games=0, best_n_per_week=0)
+    with pytest.raises(ToolError, match="best_n_per_week"):
+        tools.get_game_log(con, best_n_per_week=0, sort_by="zz")
+    with pytest.raises(ToolError, match="Unknown stat 'zz'"):
+        tools.get_game_log(con, sort_by="zz", scoring="missing")
+    with pytest.raises(ToolError, match="No fantasy scoring profile"):
+        tools.get_game_log(con, scoring="missing")
+    with pytest.raises(ToolError, match="Pass a player or a team"):
+        tools.get_game_log(con, season="2019-20")
+
+    with pytest.raises(ToolError, match="one stat at a time"):
+        tools.get_leaders(con, "pts,reb", position="x", entity="team")
+    with pytest.raises(ToolError, match="scoring applies only"):
+        tools.get_leaders(
+            con, "pts", scoring={"pts": 1}, per_mode="per_36", entity="team"
+        )
+    with pytest.raises(ToolError, match="players only"):
+        tools.get_leaders(
+            con, "pts", per_mode="per_36", entity="team", season="2019-20"
+        )
+
+
+def test_result_key_order(con):
+    """Results list the filters first, then the numbers; clients read them in this order."""
+    scope = ["player", "season", "season_type", "opponent"]
+    notes = ["last_n_games", "scoring"]
+    filters = {
+        "player": "Jokic",
+        "opponent": "BOS",
+        "last_n_games": 5,
+        "scoring": {"pts": 1},
+    }
+    r = tools.get_stat(con, "fpts", **filters)
+    assert list(r) == [
+        *scope,
+        "per_mode",
+        "games_played",
+        *notes,
+        "date_range",
+        "stats",
+    ]
+    r = tools.get_game_log(con, best_n_per_week=2, **filters)
+    assert list(r) == [
+        *scope,
+        "games_matched",
+        "games_shown",
+        "sorted_by",
+        *notes,
+        "date_range",
+        "weekly_best",
+        "games",
+    ]
+
+    # Every optional filter at once; no games match.
+    filters |= {"team": "LAL", "teammates_out": "Seth Curry", "teammates_in": "Reaves"}
+    scope = [
+        "player",
+        "team_filter",
+        "season",
+        "season_type",
+        "opponent",
+        "teammates_out",
+        "teammates_in",
+    ]
+    notes.append("teammate_note")
+    r = tools.get_stat(con, "fpts", **filters)
+    assert list(r) == [*scope, "per_mode", "games_played", *notes, "stats", "note"]
+    r = tools.get_game_log(con, **filters)
+    assert list(r) == [
+        *scope,
+        "games_matched",
+        "games_shown",
+        "sorted_by",
+        *notes,
+        "games",
+        "note",
+    ]
+
+    r = tools.get_leaders(
+        con,
+        "fpts",
+        team="LAL",
+        position="G",
+        teammates_out="Jokic",
+        scoring={"pts": 1},
+        min_games=1,
+    )
+    assert list(r) == [
+        "stat",
+        "label",
+        "entity",
+        "season",
+        "season_type",
+        "per_mode",
+        "order",
+        "scoring",
+        "team_filter",
+        "position_filter",
+        "position_note",
+        "teammates_out",
+        "teammate_note",
+        "qualification",
+        "qualified_count",
+        "leaders",
+    ]
+    r = tools.get_leaders(con, "pts")
+    assert list(r["leaders"][0]) == [
+        "rank",
+        "player",
+        "team",
+        "position",
+        "games_played",
+        "value",
+    ]
+    r = tools.get_leaders(con, "pts", entity="team")
+    assert list(r["leaders"][0]) == ["rank", "team", "games_played", "value"]

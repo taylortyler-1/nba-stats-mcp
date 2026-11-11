@@ -961,11 +961,23 @@ def stat_value(stat: Stat, sums: Sums, games: int, per_mode: PerMode) -> float |
     return round(total * 36 / minutes, 1) if minutes else None
 
 
+def _entity(player: str | None, team: str | None) -> Entity:
+    """A player query (optionally narrowed to one team's games) or a team query."""
+    if not player and not team:
+        raise ToolError("Pass a player or a team.")
+    return "player" if player else "team"
+
+
 def _check_per_mode(entity: Entity, per_mode: PerMode) -> None:
     if entity == "team" and per_mode == "per_36":
         raise ToolError(
             "per_36 applies to players only; use per_game or totals for teams."
         )
+
+
+def _check_at_least_one(name: str, value: int | None) -> None:
+    if value is not None and value < 1:
+        raise ToolError(f"{name} must be at least 1.")
 
 
 def _resolve_teammates(
@@ -988,6 +1000,13 @@ def _resolve_teammates(
     return out, in_
 
 
+_TEAMMATE_NOTE = (
+    "Teammate filters use box scores: a player with no box-score row for a game "
+    "(injured, rested, DNP, or not yet with the team) counts as out."
+)
+NO_GAMES = "No games match these filters."
+
+
 @dataclass
 class _Scope:
     """The resolved filters shared by get_stat and get_game_log."""
@@ -995,30 +1014,51 @@ class _Scope:
     entity: Entity
     table: str
     seasons: list[str]
+    season_type: str
     subject: Player | None
     team: Team | None
     opponent: Team | None
     teammates_out: list[Player]
     teammates_in: list[Player]
+    last_n_games: int | None
+    fantasy: Scoring | None
     where: str
     params: list[Any]
 
-    def header(self, season_type: str) -> dict[str, Any]:
-        h: dict[str, Any] = {}
+    def select(self, columns: str, *, with_poss: bool = False) -> tuple[str, list[Any]]:
+        """SQL and params for the matching games, newest first, cut to last_n_games."""
+        source = _source(self.table) if with_poss else self.table
+        sql = (
+            f"SELECT {columns} FROM {source} WHERE {self.where} ORDER BY game_date DESC"
+        )
+        if self.last_n_games is None:
+            return sql, self.params
+        return f"{sql} LIMIT ?", [*self.params, self.last_n_games]
+
+    def result(self, **fields: Any) -> dict[str, Any]:
+        """Start a tool result: the filters, then the tool's own `fields`, then filter notes."""
+        r: dict[str, Any] = {}
         if self.subject:
-            h["player"] = self.subject.out()
+            r["player"] = self.subject.out()
             if self.team:
-                h["team_filter"] = self.team.abbreviation
+                r["team_filter"] = self.team.abbreviation
         else:
-            h["team"] = self.team.out()  # type: ignore[union-attr]
-        h |= {"season": _season_out(self.seasons), "season_type": season_type}
+            r["team"] = self.team.out()  # type: ignore[union-attr]
+        r |= {"season": _season_out(self.seasons), "season_type": self.season_type}
         if self.opponent:
-            h["opponent"] = self.opponent.abbreviation
+            r["opponent"] = self.opponent.abbreviation
         if self.teammates_out:
-            h["teammates_out"] = [p.name for p in self.teammates_out]
+            r["teammates_out"] = [p.name for p in self.teammates_out]
         if self.teammates_in:
-            h["teammates_in"] = [p.name for p in self.teammates_in]
-        return h
+            r["teammates_in"] = [p.name for p in self.teammates_in]
+        r |= fields
+        if self.last_n_games is not None:
+            r["last_n_games"] = self.last_n_games
+        if self.fantasy:
+            r["scoring"] = self.fantasy.out()
+        if self.teammates_out or self.teammates_in:
+            r["teammate_note"] = _TEAMMATE_NOTE
+        return r
 
 
 def _scope(
@@ -1031,10 +1071,10 @@ def _scope(
     opponent: str | None,
     teammates_out: str | list[str] | None,
     teammates_in: str | list[str] | None,
+    last_n_games: int | None,
+    fantasy: Scoring | None,
 ) -> _Scope:
-    if not player and not team:
-        raise ToolError("Pass a player or a team.")
-    entity: Entity = "player" if player else "team"
+    entity = _entity(player, team)
     seasons = season_scope(con, season, season_type)
     subject = resolve_player(con, player) if player else None
     team_obj = resolve_team(con, team) if team else None
@@ -1052,14 +1092,24 @@ def _scope(
         teammates_in=in_,
     )
     return _Scope(
-        entity, table, seasons, subject, team_obj, opp, out, in_, where, params
+        entity=entity,
+        table=table,
+        seasons=seasons,
+        season_type=season_type,
+        subject=subject,
+        team=team_obj,
+        opponent=opp,
+        teammates_out=out,
+        teammates_in=in_,
+        last_n_games=last_n_games,
+        fantasy=fantasy,
+        where=where,
+        params=params,
     )
 
 
-_TEAMMATE_NOTE = (
-    "Teammate filters use box scores: a player with no box-score row for a game "
-    "(injured, rested, DNP, or not yet with the team) counts as out."
-)
+def _date_range(first: date, last: date) -> dict[str, str]:
+    return {"first": first.isoformat(), "last": last.isoformat()}
 
 
 def _with_fpts(
@@ -1134,13 +1184,9 @@ def get_stat(
     scoring: str | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     stats = resolve_stats(stat)
-    if not player and not team:
-        raise ToolError("Pass a player or a team.")
-    _check_per_mode("player" if player else "team", per_mode)
-    if last_n_games is not None and last_n_games < 1:
-        raise ToolError("last_n_games must be at least 1.")
+    _check_per_mode(_entity(player, team), per_mode)
+    _check_at_least_one("last_n_games", last_n_games)
     fantasy = _with_fpts(con, stats, scoring)
-
     sc = _scope(
         con,
         player=player,
@@ -1150,41 +1196,26 @@ def get_stat(
         opponent=opponent,
         teammates_out=teammates_out,
         teammates_in=teammates_in,
+        last_n_games=last_n_games,
+        fantasy=fantasy,
     )
-    params = list(sc.params)
-    limit = ""
-    if last_n_games is not None:
-        limit = "LIMIT ?"
-        params.append(last_n_games)
+    games_sql, params = sc.select("*", with_poss=True)
     row = _rows_as_dicts(
         con.execute(
             f"""
-            WITH g AS (SELECT * FROM {_source(sc.table)} WHERE {sc.where} ORDER BY game_date DESC {limit})
             SELECT COUNT(*) AS gp, MIN(game_date) AS first_game, MAX(game_date) AS last_game,
                    {_sums_sql(fantasy)}
-            FROM g
+            FROM ({games_sql})
             """,
             params,
         )
     )[0]
     gp = row["gp"]
 
-    result = sc.header(season_type)
-    result |= {"per_mode": per_mode, "games_played": gp}
-    if last_n_games is not None:
-        result["last_n_games"] = last_n_games
-    if fantasy:
-        result["scoring"] = fantasy.out()
-    if sc.teammates_out or sc.teammates_in:
-        result["teammate_note"] = _TEAMMATE_NOTE
+    result = sc.result(per_mode=per_mode, games_played=gp)
     if gp == 0:
-        result["stats"] = {}
-        result["note"] = "No games match these filters."
-        return result
-    result["date_range"] = {
-        "first": row["first_game"].isoformat(),
-        "last": row["last_game"].isoformat(),
-    }
+        return result | {"stats": {}, "note": NO_GAMES}
+    result["date_range"] = _date_range(row["first_game"], row["last_game"])
     result["stats"] = {
         s.name: {"label": s.label, "value": stat_value(s, row, gp, per_mode)}
         for s in stats
@@ -1231,10 +1262,8 @@ def get_game_log(
     best_n_per_week: int | None = None,
 ) -> dict[str, Any]:
     stats = resolve_stats(list(DEFAULT_LOG_STATS) if not stat else stat)
-    if last_n_games is not None and last_n_games < 1:
-        raise ToolError("last_n_games must be at least 1.")
-    if best_n_per_week is not None and best_n_per_week < 1:
-        raise ToolError("best_n_per_week must be at least 1.")
+    _check_at_least_one("last_n_games", last_n_games)
+    _check_at_least_one("best_n_per_week", best_n_per_week)
     sort_stat: Stat | None = None
     if _norm_key(sort_by) not in ("date", "game date"):
         sorted_by = resolve_stats(sort_by)
@@ -1255,25 +1284,17 @@ def get_game_log(
         opponent=opponent,
         teammates_out=teammates_out,
         teammates_in=teammates_in,
+        last_n_games=last_n_games,
+        fantasy=fantasy,
     )
-    params = list(sc.params)
-    last_n = ""
-    if last_n_games is not None:
-        last_n = "LIMIT ?"
-        params.append(last_n_games)
-    fpts_col = f", {fantasy.sql()} AS fpts" if fantasy else ""
-    derived = "".join(f", {e} AS {c}" for c, e in DERIVED_COLUMNS.items())
-    rows = _rows_as_dicts(
-        con.execute(
-            f"""
-            SELECT game_date, team_abbreviation, opponent_abbreviation, is_home, wl,
-                   {", ".join(STAT_COLUMNS)} {derived} {fpts_col}
-            FROM {sc.table} WHERE {sc.where}
-            ORDER BY game_date DESC {last_n}
-            """,
-            params,
-        )
-    )
+    columns = [
+        "game_date, team_abbreviation, opponent_abbreviation, is_home, wl",
+        *STAT_COLUMNS,
+        *(f"{e} AS {c}" for c, e in DERIVED_COLUMNS.items()),
+    ]
+    if fantasy:
+        columns.append(f"{fantasy.sql()} AS fpts")
+    rows = _rows_as_dicts(con.execute(*sc.select(", ".join(columns))))
 
     games = []
     for r in rows:
@@ -1296,27 +1317,15 @@ def get_game_log(
         with_value.sort(key=lambda x: x[1][sort_stat.name], reverse=(order == "desc"))
         games = with_value + without
 
-    result = sc.header(season_type)
-    result |= {
-        "games_matched": len(games),
-        "games_shown": min(limit, len(games)),
-        "sorted_by": f"{'date' if sort_stat is None else sort_stat.name} {order}",
-    }
-    if last_n_games is not None:
-        result["last_n_games"] = last_n_games
-    if fantasy:
-        result["scoring"] = fantasy.out()
-    if sc.teammates_out or sc.teammates_in:
-        result["teammate_note"] = _TEAMMATE_NOTE
+    result = sc.result(
+        games_matched=len(games),
+        games_shown=min(limit, len(games)),
+        sorted_by=f"{'date' if sort_stat is None else sort_stat.name} {order}",
+    )
     if not games:
-        result["games"] = []
-        result["note"] = "No games match these filters."
-        return result
+        return result | {"games": [], "note": NO_GAMES}
     dates = [d for d, _ in games]
-    result["date_range"] = {
-        "first": min(dates).isoformat(),
-        "last": max(dates).isoformat(),
-    }
+    result["date_range"] = _date_range(min(dates), max(dates))
 
     if best_n_per_week is not None:
         result["weekly_best"] = _weekly_best(
