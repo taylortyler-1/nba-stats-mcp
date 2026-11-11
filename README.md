@@ -20,6 +20,16 @@ It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers,
 
 The first start takes a minute or so while uv downloads Python and the server's packages. Later starts are fast.
 
+## Install
+
+**Claude desktop app (Cowork):** go to **Customize > Plugins > Add > Add marketplace**, enter `https://github.com/taylortyler-1/nba-stats-mcp`, then install **Hoops Stats**.
+
+**Claude Code:**
+
+```
+/plugin install hoops-stats --marketplace taylortyler-1/nba-stats-mcp
+```
+
 ## Use it
 
 Just ask a question. The first time, there's no data yet, so Claude calls `refresh_data` to download the current season, which takes about a minute, and then answers. You can also ask Claude to:
