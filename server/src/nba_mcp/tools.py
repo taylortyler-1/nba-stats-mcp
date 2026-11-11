@@ -27,11 +27,9 @@ from typing import Any, Literal
 import duckdb
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .db import STAT_COLUMNS, has_table
+from .db import GAMES_TABLE, STAT_COLUMNS, Entity, SeasonType, has_table
 
-SeasonType = Literal["Regular Season", "Playoffs"]
 PerMode = Literal["totals", "per_game", "per_36", "per_100"]
-Entity = Literal["player", "team"]
 
 Sums = dict[str, float]
 
@@ -315,13 +313,16 @@ FPTS = Stat(
     column="fpts",
 )
 
+ALL_STATS = (*STATS.values(), FPTS)
+CATEGORIES = tuple(dict.fromkeys(s.category for s in ALL_STATS))
+
 
 def _norm_key(text: str) -> str:
     return re.sub(r"[\s_]+", " ", text.strip().lower())
 
 
 _LOOKUP: dict[str, Stat] = {}
-for _s in (*STATS.values(), FPTS):
+for _s in ALL_STATS:
     for _key in (_s.name, _s.label, *_s.aliases):
         _LOOKUP[_norm_key(_key)] = _s
 
@@ -1037,7 +1038,7 @@ def _scope(
     team_obj = resolve_team(con, team) if team else None
     opp = resolve_team(con, opponent) if opponent else None
     out, in_ = _resolve_teammates(con, subject, teammates_out, teammates_in)
-    table = "player_games" if entity == "player" else "team_games"
+    table = GAMES_TABLE[entity]
     where, params = _where(
         seasons,
         season_type,
@@ -1081,12 +1082,11 @@ def _week_start(d: date) -> date:
 def list_stats(
     con: duckdb.DuckDBPyConnection | None, category: str | None = None
 ) -> dict[str, Any]:
-    stats = [*STATS.values(), FPTS]
+    stats = list(ALL_STATS)
     if category:
-        cats = {s.category for s in stats}
-        if category.lower() not in cats:
+        if category.lower() not in CATEGORIES:
             raise ToolError(
-                f"Unknown category {category!r}. Categories: {', '.join(sorted(cats))}."
+                f"Unknown category {category!r}. Categories: {', '.join(sorted(CATEGORIES))}."
             )
         stats = [s for s in stats if s.category == category.lower()]
     return {
@@ -1190,6 +1190,11 @@ def get_stat(
     return result
 
 
+MAX_LOG_LIMIT = 100
+MAX_LEADERS_LIMIT = 50
+# Leaderboard minimum for per-36 / per-100 counting stats.
+MIN_MINUTES_PER_GAME = 15
+
 DEFAULT_LOG_STATS = (
     "min",
     "pts",
@@ -1237,7 +1242,7 @@ def get_game_log(
         if sort_stat not in stats:
             stats.append(sort_stat)
     fantasy = _with_fpts(con, stats, scoring, need=best_n_per_week is not None)
-    limit = max(1, min(limit, 100))
+    limit = max(1, min(limit, MAX_LOG_LIMIT))
 
     sc = _scope(
         con,
@@ -1382,7 +1387,7 @@ def get_leaders(
         raise ToolError(
             "The team filter narrows a player leaderboard; omit it when entity='team'."
         )
-    limit = max(1, min(limit, 50))
+    limit = max(1, min(limit, MAX_LEADERS_LIMIT))
 
     seasons = season_scope(con, season, season_type)
     team_obj = resolve_team(con, team) if team else None
@@ -1390,7 +1395,7 @@ def get_leaders(
     if out and entity == "team":
         raise ToolError("teammates_out ranks players; omit it when entity='team'.")
     team_id = team_obj.team_id if team_obj else None
-    table = "player_games" if entity == "player" else "team_games"
+    table = GAMES_TABLE[entity]
     where, params = _where(
         seasons, season_type, table=table, team_id=team_id, teammates_out=out
     )
@@ -1448,7 +1453,7 @@ def get_leaders(
         if s.is_rate and s.volume:
             qualification[f"min_{s.volume}_per_game"] = s.min_volume_per_game
         if per_mode in ("per_36", "per_100") and not s.is_rate:
-            qualification["min_minutes_per_game"] = 15
+            qualification["min_minutes_per_game"] = MIN_MINUTES_PER_GAME
 
     def qualifies(r: dict[str, Any]) -> bool:
         gp = r["gp"]
@@ -1456,9 +1461,7 @@ def get_leaders(
             return False
         if s.is_rate and s.volume and (r[s.volume] or 0) < s.min_volume_per_game * gp:
             return False
-        return not (
-            "min_minutes_per_game" in qualification and (r["min"] or 0) < 15 * gp
-        )
+        return (r["min"] or 0) >= qualification.get("min_minutes_per_game", 0) * gp
 
     scored = []
     for r in rows:

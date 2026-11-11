@@ -77,11 +77,19 @@ REFRESH_PAUSE = 1.0  # seconds between stats.nba.com requests, to be polite
 _refresh_lock = anyio.Lock()
 
 
-def _with_db[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+def _with_db[T](
+    fn: Callable[..., T], *args: Any, missing_ok: bool = False, **kwargs: Any
+) -> T:
+    """Call `fn(con, ...)` on a read connection.
+
+    With `missing_ok`, `fn` gets None instead of a connection when no database exists yet.
+    """
     try:
         with db.connect(read_only=True) as con:
             return fn(con, *args, **kwargs)
     except FileNotFoundError:
+        if missing_ok:
+            return fn(None, *args, **kwargs)
         raise ToolError(NO_DATA) from None
     except db.DatabaseBusy:
         raise ToolError(BUSY) from None
@@ -102,11 +110,11 @@ SeasonArg = Annotated[
     ),
 ]
 SeasonTypeArg = Annotated[
-    Literal["Regular Season", "Playoffs"],
+    tools.SeasonType,
     Field(description="Default: 'Regular Season'."),
 ]
 PerModeArg = Annotated[
-    Literal["totals", "per_game", "per_36", "per_100"],
+    tools.PerMode,
     Field(
         description="How counting stats are expressed. per_36 is players only. per_100 is per 100 "
         "possessions (for a player, possessions while on court). Ignored for percentages and ratios."
@@ -131,25 +139,32 @@ TeammatesInArg = Annotated[
     str | list[str] | None,
     Field(description="Only games where these teammates DID play."),
 ]
+PlayerArg = Annotated[
+    str | None, Field(description="Player name (partial is fine) or NBA player id.")
+]
+LastNGamesArg = Annotated[
+    int | None,
+    Field(description="Only the most recent N games matching the filters."),
+]
+OpponentArg = Annotated[str | None, Field(description="Only games against this team.")]
 
 
 @mcp.tool(annotations=READ_ONLY)
 def list_stats(
     category: Annotated[
-        str | None, Field(description="Filter to 'box score' or 'shooting'.")
+        str | None,
+        Field(
+            description="Filter to one category: "
+            + ", ".join(repr(c) for c in tools.CATEGORIES)
+            + "."
+        ),
     ] = None,
 ) -> dict[str, Any]:
     """List the stats get_stat and get_leaders understand, plus which seasons are loaded.
 
     Call this when unsure of a stat's name or whether a season is available.
     """
-    try:
-        with db.connect(read_only=True) as con:
-            return tools.list_stats(con, category)
-    except FileNotFoundError:
-        return tools.list_stats(None, category)
-    except db.DatabaseBusy:
-        raise ToolError(BUSY) from None
+    return _with_db(tools.list_stats, category, missing_ok=True)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -160,9 +175,7 @@ def get_stat(
             description="Stat name(s), e.g. 'pts', ['pts', 'reb', 'ast'], 'ts_pct', 'stocks', 'ast_to', 'fpts'. Common names like 'points' work."
         ),
     ],
-    player: Annotated[
-        str | None, Field(description="Player name (partial is fine) or NBA player id.")
-    ] = None,
+    player: PlayerArg = None,
     team: Annotated[
         str | None,
         Field(
@@ -172,13 +185,8 @@ def get_stat(
     season: SeasonArg = None,
     season_type: SeasonTypeArg = "Regular Season",
     per_mode: PerModeArg = "per_game",
-    last_n_games: Annotated[
-        int | None,
-        Field(description="Only the most recent N games matching the filters."),
-    ] = None,
-    opponent: Annotated[
-        str | None, Field(description="Only games against this team.")
-    ] = None,
+    last_n_games: LastNGamesArg = None,
+    opponent: OpponentArg = None,
     teammates_out: TeammatesOutArg = None,
     teammates_in: TeammatesInArg = None,
     scoring: ScoringArg = None,
@@ -209,9 +217,7 @@ def get_stat(
 
 @mcp.tool(annotations=READ_ONLY)
 def get_game_log(
-    player: Annotated[
-        str | None, Field(description="Player name (partial is fine) or NBA player id.")
-    ] = None,
+    player: PlayerArg = None,
     team: Annotated[
         str | None,
         Field(
@@ -221,19 +227,14 @@ def get_game_log(
     stat: Annotated[
         str | list[str] | None,
         Field(
-            description="Stats per game. Default: min, pts, reb, ast, stl, blk, tov, fg3m, fgm, fga, ftm, fta "
+            description=f"Stats per game. Default: {', '.join(tools.DEFAULT_LOG_STATS)} "
             "(plus fpts when scoring is set)."
         ),
     ] = None,
     season: SeasonArg = None,
     season_type: SeasonTypeArg = "Regular Season",
-    last_n_games: Annotated[
-        int | None,
-        Field(description="Only the most recent N games matching the filters."),
-    ] = None,
-    opponent: Annotated[
-        str | None, Field(description="Only games against this team.")
-    ] = None,
+    last_n_games: LastNGamesArg = None,
+    opponent: OpponentArg = None,
     teammates_out: TeammatesOutArg = None,
     teammates_in: TeammatesInArg = None,
     scoring: ScoringArg = None,
@@ -246,7 +247,8 @@ def get_game_log(
         Field(description="'desc': newest or highest first."),
     ] = "desc",
     limit: Annotated[
-        int, Field(ge=1, le=100, description="How many games to list.")
+        int,
+        Field(ge=1, le=tools.MAX_LOG_LIMIT, description="How many games to list."),
     ] = 25,
     best_n_per_week: Annotated[
         int | None,
@@ -289,12 +291,15 @@ def get_leaders(
     season_type: SeasonTypeArg = "Regular Season",
     per_mode: PerModeArg = "per_game",
     entity: Annotated[
-        Literal["player", "team"], Field(description="Rank players or teams.")
+        tools.Entity, Field(description="Rank players or teams.")
     ] = "player",
     team: Annotated[
         str | None, Field(description="Rank only this team's players.")
     ] = None,
-    limit: Annotated[int, Field(ge=1, le=50, description="How many to return.")] = 10,
+    limit: Annotated[
+        int,
+        Field(ge=1, le=tools.MAX_LEADERS_LIMIT, description="How many to return."),
+    ] = 10,
     min_games: Annotated[
         int | None,
         Field(
@@ -417,7 +422,7 @@ async def refresh_data(
         )
     async with _refresh_lock:
         targets = _refresh_targets(seasons)
-        slices = ingest.plan(targets, list(ingest.SEASON_TYPES))
+        slices = ingest.plan(targets, list(db.SEASON_TYPES))
         steps = len(slices) + 1  # + player positions
         started = time.monotonic()
         loaded: dict[str, dict[str, dict[str, int]]] = {}

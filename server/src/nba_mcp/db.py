@@ -6,10 +6,18 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal, get_args
 
 import duckdb
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "nba-mcp" / "nba.duckdb"
+
+Entity = Literal["player", "team"]
+SeasonType = Literal["Regular Season", "Playoffs"]
+SEASON_TYPES: tuple[SeasonType, ...] = get_args(SeasonType)
+
+# The per-game box-score table for each entity.
+GAMES_TABLE: dict[Entity, str] = {"player": "player_games", "team": "team_games"}
 
 # Box-score columns stored per game, shared by player_games and team_games.
 STAT_COLUMNS = (

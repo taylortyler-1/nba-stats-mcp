@@ -15,23 +15,17 @@ import time
 from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from datetime import date
-from typing import Literal
 
 import duckdb
 import pandas as pd
 
 from . import db
+from .db import SEASON_TYPES, Entity
 
 log = logging.getLogger(__name__)
 
-Entity = Literal["player", "team"]
-
-SEASON_TYPES = ("Regular Season", "Playoffs")
-
 # nba_api column -> our column, for the box-score stats.
 _STAT_MAP = {c.upper(): c for c in db.STAT_COLUMNS}
-
-_TABLE = {"player": "player_games", "team": "team_games"}
 
 
 def season_label(start_year: int) -> str:
@@ -88,7 +82,7 @@ def replace_games(
     df: pd.DataFrame,
 ) -> int:
     """Replace one season/season-type slice of a games table with `df`."""
-    table = _TABLE[entity]
+    table = db.GAMES_TABLE[entity]
     con.execute("BEGIN")
     try:
         con.execute(
