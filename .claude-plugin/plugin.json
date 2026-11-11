@@ -1,8 +1,9 @@
 {
   "name": "hoops-stats",
   "displayName": "Hoops Stats",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ask about NBA player and team stats — averages, shooting percentages, position-filtered leaderboards, game logs, teammate splits, and fantasy points with your league's scoring — computed locally from box scores downloaded from stats.nba.com.",
+  "icon": "./.claude-plugin/icon.png",
   "author": {
     "name": "Taylor Tyler"
   },
