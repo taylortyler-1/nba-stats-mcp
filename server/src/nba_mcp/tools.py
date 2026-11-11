@@ -1363,6 +1363,136 @@ def _weekly_best(games: list[tuple[date, float]], n: int) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class Qualification:
+    """Leaderboard minimums for players, so a 2-game 10-for-10 doesn't top the field.
+
+    Teams have none. Totals of counting stats reward volume on their own, so they
+    get no games minimum either.
+    """
+
+    min_games: int = 0
+    # Rate stats: the column that must average `min_volume_per_game` (e.g. fga for fg_pct).
+    volume: str | None = None
+    min_volume_per_game: float = 0
+    min_minutes_per_game: int = 0
+
+    def passes(self, row: Mapping[str, Any]) -> bool:
+        gp = row["gp"]
+        if gp < self.min_games:
+            return False
+        if self.volume and (row[self.volume] or 0) < self.min_volume_per_game * gp:
+            return False
+        return (row["min"] or 0) >= self.min_minutes_per_game * gp
+
+    def out(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.min_games:
+            out["min_games"] = self.min_games
+        if self.volume:
+            out[f"min_{self.volume}_per_game"] = self.min_volume_per_game
+        if self.min_minutes_per_game:
+            out["min_minutes_per_game"] = self.min_minutes_per_game
+        return out
+
+
+def _default_min_games(
+    con: duckdb.DuckDBPyConnection,
+    seasons: list[str],
+    season_type: str,
+    team_id: int | None,
+    teammates_out: Sequence[Player],
+) -> int:
+    """Half the most games any team in scope has played (a quarter in the playoffs).
+
+    The leaderboard's filters are applied to team games, so a "without X" leaderboard
+    scales to the games X's teams played without X.
+    """
+    where, params = _where(
+        seasons,
+        season_type,
+        table="team_games",
+        team_id=team_id,
+        teammates_out=teammates_out,
+    )
+    max_gp = _scalar(
+        con,
+        f"SELECT MAX(gp) FROM (SELECT COUNT(*) AS gp FROM team_games WHERE {where} GROUP BY team_id)",
+        params,
+    )
+    frac = 0.5 if season_type == "Regular Season" else 0.25
+    return math.ceil(frac * (max_gp or 0))
+
+
+# Filters that only make sense when ranking players.
+_PLAYERS_ONLY = {
+    "position": "position filters a player leaderboard",
+    "team": "The team filter narrows a player leaderboard",
+    "teammates_out": "teammates_out ranks players",
+}
+
+
+def _check_players_only(entity: Entity, **filters: Any) -> None:
+    if entity == "team":
+        for name, value in filters.items():
+            if value:
+                raise ToolError(f"{_PLAYERS_ONLY[name]}; omit it when entity='team'.")
+
+
+def _leader_rows(
+    con: duckdb.DuckDBPyConnection,
+    entity: Entity,
+    where: str,
+    params: list[Any],
+    fantasy: Scoring | None,
+    with_positions: bool,
+) -> list[dict[str, Any]]:
+    """One row of summed stats per player or team: id, name, team, gp, the sums."""
+    if entity == "team":
+        sql = f"""
+            SELECT team_id AS id, arg_max(team_abbreviation, game_date) AS name, NULL AS team,
+                   COUNT(*) AS gp, {_sums_sql(fantasy)}
+            FROM {_source("team_games")} WHERE {where} GROUP BY team_id
+        """
+    else:
+        position = (
+            "(SELECT pl.position FROM players pl WHERE pl.player_id = g.id)"
+            if with_positions
+            else "NULL"
+        )
+        sql = f"""
+            SELECT g.*, {position} AS position FROM (
+                SELECT player_id AS id, arg_max(player_name, game_date) AS name,
+                       string_agg(DISTINCT team_abbreviation, '/' ORDER BY team_abbreviation) AS team,
+                       COUNT(*) AS gp, {_sums_sql(fantasy)}
+                FROM {_source("player_games")} WHERE {where} GROUP BY player_id
+            ) g
+        """
+    return _rows_as_dicts(con.execute(sql, params))
+
+
+def _leader_entries(
+    scored: list[tuple[float, dict[str, Any]]], entity: Entity, with_positions: bool
+) -> list[dict[str, Any]]:
+    """Leaderboard entries for rows already sorted by value; equal values share a rank."""
+    entries = []
+    prev_value, rank = None, 0
+    for i, (v, r) in enumerate(scored, start=1):
+        if v != prev_value:
+            rank, prev_value = i, v
+        entry: dict[str, Any] = {"rank": rank}
+        if entity == "player":
+            entry["player"] = {"id": r["id"], "name": r["name"]}
+            entry["team"] = r["team"]
+            if with_positions:
+                entry["position"] = r["position"]
+        else:
+            entry["team"] = r["name"]
+        entry |= {"games_played": r["gp"], "value": v}
+        entries.append(entry)
+    return entries
+
+
 def get_leaders(
     con: duckdb.DuckDBPyConnection,
     stat: str,
@@ -1381,34 +1511,30 @@ def get_leaders(
     resolved = resolve_stats(stat)
     if len(resolved) != 1:
         raise ToolError("get_leaders ranks one stat at a time.")
+    s = resolved[0]
+    _check_players_only(
+        entity, position=position, team=team, teammates_out=_names(teammates_out)
+    )
     pos_filter = parse_positions(position) if position else None
-    if pos_filter and entity == "team":
-        raise ToolError(
-            "position filters a player leaderboard; omit it when entity='team'."
-        )
     has_positions = positions_loaded(con)
     if pos_filter and not has_positions:
         raise ToolError(NO_POSITIONS)
-    s = resolved[0]
     if scoring is not None and s is not FPTS:
         raise ToolError("scoring applies only to stat='fpts'.")
     fantasy = resolve_scoring(con, scoring) if s is FPTS else None
     _check_per_mode(entity, per_mode)
-    if entity == "team" and team:
-        raise ToolError(
-            "The team filter narrows a player leaderboard; omit it when entity='team'."
-        )
     limit = max(1, min(limit, MAX_LEADERS_LIMIT))
 
     seasons = season_scope(con, season, season_type)
     team_obj = resolve_team(con, team) if team else None
-    out, _ = _resolve_teammates(con, None, teammates_out, None)
-    if out and entity == "team":
-        raise ToolError("teammates_out ranks players; omit it when entity='team'.")
     team_id = team_obj.team_id if team_obj else None
-    table = GAMES_TABLE[entity]
+    out, _ = _resolve_teammates(con, None, teammates_out, None)
     where, params = _where(
-        seasons, season_type, table=table, team_id=team_id, teammates_out=out
+        seasons,
+        season_type,
+        table=GAMES_TABLE[entity],
+        team_id=team_id,
+        teammates_out=out,
     )
     if pos_filter:
         pos_sql, pos_params = pos_filter.sql("pl.position")
@@ -1416,88 +1542,33 @@ def get_leaders(
             f" AND player_id IN (SELECT pl.player_id FROM players pl WHERE {pos_sql})"
         )
         params += pos_params
+    rows = _leader_rows(con, entity, where, params, fantasy, has_positions)
 
+    qualification = Qualification()
     if entity == "player":
-        pos_col = (
-            "(SELECT pl.position FROM players pl WHERE pl.player_id = g.id)"
-            if has_positions
-            else "NULL"
+        if min_games is None:
+            needs_games = s.is_rate or per_mode != "totals"
+            min_games = (
+                _default_min_games(con, seasons, season_type, team_id, out)
+                if needs_games
+                else 0
+            )
+        per_minute = per_mode in ("per_36", "per_100") and not s.is_rate
+        qualification = Qualification(
+            min_games=min_games,
+            volume=s.volume if s.is_rate else None,
+            min_volume_per_game=s.min_volume_per_game,
+            min_minutes_per_game=MIN_MINUTES_PER_GAME if per_minute else 0,
         )
-        group_sql = f"""
-            SELECT player_id AS id, arg_max(player_name, game_date) AS name,
-                   string_agg(DISTINCT team_abbreviation, '/' ORDER BY team_abbreviation) AS team,
-                   COUNT(*) AS gp, {_sums_sql(fantasy)}
-            FROM {_source("player_games")} WHERE {where} GROUP BY player_id
-        """
-        group_sql = f"SELECT g.*, {pos_col} AS position FROM ({group_sql}) g"
-    else:
-        group_sql = f"""
-            SELECT team_id AS id, arg_max(team_abbreviation, game_date) AS name, NULL AS team,
-                   COUNT(*) AS gp, {_sums_sql(fantasy)}
-            FROM {_source("team_games")} WHERE {where} GROUP BY team_id
-        """
-    rows = _rows_as_dicts(con.execute(group_sql, params))
-
-    # Qualification: players need enough games (and volume, for rates) so a
-    # 2-game 10-for-10 doesn't top the field. Totals reward volume on their own.
-    qualification: dict[str, Any] = {}
-    if entity == "player":
-        if min_games is None and (s.is_rate or per_mode != "totals"):
-            # Same filters on team games, so a "without X" leaderboard scales to
-            # the games X's teams played without X.
-            twhere, tparams = _where(
-                seasons,
-                season_type,
-                table="team_games",
-                team_id=team_id,
-                teammates_out=out,
-            )
-            max_gp = _scalar(
-                con,
-                f"SELECT MAX(gp) FROM (SELECT COUNT(*) AS gp FROM team_games WHERE {twhere} GROUP BY team_id)",
-                tparams,
-            )
-            frac = 0.5 if season_type == "Regular Season" else 0.25
-            min_games = math.ceil(frac * (max_gp or 0))
-        if min_games:
-            qualification["min_games"] = min_games
-        if s.is_rate and s.volume:
-            qualification[f"min_{s.volume}_per_game"] = s.min_volume_per_game
-        if per_mode in ("per_36", "per_100") and not s.is_rate:
-            qualification["min_minutes_per_game"] = MIN_MINUTES_PER_GAME
-
-    def qualifies(r: dict[str, Any]) -> bool:
-        gp = r["gp"]
-        if gp < qualification.get("min_games", 0):
-            return False
-        if s.is_rate and s.volume and (r[s.volume] or 0) < s.min_volume_per_game * gp:
-            return False
-        return (r["min"] or 0) >= qualification.get("min_minutes_per_game", 0) * gp
 
     scored = []
     for r in rows:
-        if not qualifies(r):
+        if not qualification.passes(r):
             continue
         v = stat_value(s, r, r["gp"], per_mode)
         if v is not None:
             scored.append((v, r))
     scored.sort(key=lambda x: x[0], reverse=(order == "desc"))
-
-    leaders = []
-    prev_value, rank = None, 0
-    for i, (v, r) in enumerate(scored[:limit], start=1):
-        if v != prev_value:
-            rank, prev_value = i, v
-        entry: dict[str, Any] = {"rank": rank}
-        if entity == "player":
-            entry["player"] = {"id": r["id"], "name": r["name"]}
-            entry["team"] = r["team"]
-            if has_positions:
-                entry["position"] = r["position"]
-        else:
-            entry["team"] = r["name"]
-        entry |= {"games_played": r["gp"], "value": v}
-        leaders.append(entry)
 
     result: dict[str, Any] = {
         "stat": s.name,
@@ -1524,8 +1595,8 @@ def get_leaders(
             _TEAMMATE_NOTE + " Only those players' teammates in the seasons they "
             "were on the team are ranked."
         )
-    if qualification:
-        result["qualification"] = qualification
+    if qualification.out():
+        result["qualification"] = qualification.out()
     result["qualified_count"] = len(scored)
-    result["leaders"] = leaders
+    result["leaders"] = _leader_entries(scored[:limit], entity, has_positions)
     return result

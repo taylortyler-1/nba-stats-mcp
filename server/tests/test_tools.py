@@ -816,3 +816,18 @@ def test_result_key_order(con):
     ]
     r = tools.get_leaders(con, "pts", entity="team")
     assert list(r["leaders"][0]) == ["rank", "team", "games_played", "value"]
+
+
+def test_qualification():
+    q = tools.Qualification(min_games=2, volume="fga", min_volume_per_game=5)
+    assert q.out() == {"min_games": 2, "min_fga_per_game": 5}
+    assert q.passes({"gp": 2, "fga": 10, "min": 0})
+    assert not q.passes({"gp": 1, "fga": 10, "min": 0})
+    assert not q.passes({"gp": 2, "fga": 9, "min": 0})
+
+    q = tools.Qualification(min_minutes_per_game=15)
+    assert q.out() == {"min_minutes_per_game": 15}
+    assert q.passes({"gp": 2, "min": 30}) and not q.passes({"gp": 2, "min": 29})
+
+    assert tools.Qualification().out() == {}
+    assert tools.Qualification().passes({"gp": 0, "min": None})
