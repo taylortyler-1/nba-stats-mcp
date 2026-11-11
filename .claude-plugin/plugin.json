@@ -8,6 +8,5 @@
   },
   "repository": "https://github.com/taylortyler-1/nba-stats-mcp",
   "license": "MIT",
-  "keywords": ["nba", "basketball", "sports", "stats"],
-  "icon": "./icon.png"
+  "keywords": ["nba", "basketball", "sports", "stats"]
 }
