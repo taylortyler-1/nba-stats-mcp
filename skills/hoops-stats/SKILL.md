@@ -19,7 +19,7 @@ The hoops-stats MCP server answers questions from a local database of NBA **box 
 | `delete_fantasy_scoring` | Remove a saved scoring profile, only when asked. |
 | `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes a few seconds per season. Fails if the user is on a VPN. |
 
-If these tools aren't available, the server isn't running. It's a local server, so it starts in Claude Code and in Cowork sessions on the user's computer, not in regular claude.ai chat, and it needs `uv` installed. Tell the user that instead of answering from memory.
+If these tools aren't available, explain that the plugin needs to be enabled in a client that supports local MCP servers, with `uv` installed and available on its PATH. Help the user check the setup instead of answering from memory.
 
 ## Workflow
 
