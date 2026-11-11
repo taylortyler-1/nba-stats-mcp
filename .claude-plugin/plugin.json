@@ -6,6 +6,7 @@
   "author": {
     "name": "Taylor Tyler"
   },
+  "repository": "https://github.com/taylortyler-1/nba-stats-mcp",
   "license": "MIT",
   "keywords": ["nba", "basketball", "sports", "stats"]
 }
