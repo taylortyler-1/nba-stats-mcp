@@ -130,8 +130,29 @@ def test_position_download_failure_keeps_games(fake_nba, monkeypatch):
         r.structured_content["refreshed"]["2025-26"]["Regular Season"]["player_rows"]
         == 2
     )
+    # The position filter retries the download itself; it still fails here.
     r = call("get_leaders", {"stat": "pts", "position": "C"})
-    assert r.is_error and "refresh_data" in text(r)
+    assert r.is_error and "positions" in text(r) and "timed out" in text(r)
+    # Unfiltered leaderboards don't need positions.
+    r = call("get_leaders", {"stat": "pts"})
+    assert not r.is_error, text(r)
+
+
+def test_position_filter_loads_positions_on_first_use(fake_nba, monkeypatch):
+    real_fetch = ingest.fetch_players
+    monkeypatch.setattr(ingest, "fetch_players", lambda: pd.DataFrame())
+    assert not call("refresh_data").is_error  # games load, positions come back empty
+    monkeypatch.setattr(ingest, "fetch_players", real_fetch)
+    fake_nba.clear()
+
+    r = call("get_leaders", {"stat": "pts", "position": "C"})
+    assert not r.is_error, text(r)
+    assert r.structured_content["leaders"][0]["position"] == "C"
+    assert fake_nba == [("players",)]
+
+    # Already loaded: no second download.
+    assert not call("get_leaders", {"stat": "pts", "position": "C"}).is_error
+    assert fake_nba == [("players",)]
 
 
 def test_refresh_rejects_future_and_bad_seasons(fake_nba):

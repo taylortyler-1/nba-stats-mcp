@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
@@ -15,6 +16,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from . import db, fantasy, ingest, resolve, stats, tools
+from .positions import positions_loaded
 
 mcp = MCPServer(
     name="hoops-stats",
@@ -284,8 +286,34 @@ def get_game_log(
     )
 
 
+async def _ensure_positions() -> None:
+    """Download player positions the first time a query filters by position.
+
+    Positions come from one stats.nba.com request (a few seconds), so a fresh install
+    doesn't need a separate refresh_data call before "top steals among guards" works.
+    """
+    if await anyio.to_thread.run_sync(_with_db, positions_loaded):
+        return
+    if _refresh_lock.locked():
+        raise ToolError(
+            "A data refresh is running and will load player positions. "
+            "Retry when it finishes."
+        )
+    async with _refresh_lock:
+        try:
+            df = await anyio.to_thread.run_sync(ingest.fetch_players)
+            await anyio.to_thread.run_sync(ingest.store_players, df)
+        except db.DatabaseBusy:
+            raise ToolError(BUSY) from None
+        except Exception as exc:  # nba_api network errors vary
+            raise ToolError(
+                "Player positions aren't loaded yet and downloading them failed. "
+                + DOWNLOAD_FAILED.format(error=f"{type(exc).__name__}: {exc}", saved="")
+            ) from exc
+
+
 @mcp.tool(annotations=READ_ONLY)
-def get_leaders(
+async def get_leaders(
     stat: Annotated[str, Field(description="One stat name, e.g. 'ast' or 'fg3_pct'.")],
     season: SeasonArg = None,
     season_type: SeasonTypeArg = "Regular Season",
@@ -332,20 +360,25 @@ def get_leaders(
     the result states the thresholds used. Use min_games to loosen or tighten them.
     Use position for questions like "top steals among guards".
     """
-    return _with_db(
-        tools.get_leaders,
-        stat,
-        season=season,
-        season_type=season_type,
-        per_mode=per_mode,
-        entity=entity,
-        team=team,
-        limit=limit,
-        min_games=min_games,
-        order=order,
-        teammates_out=teammates_out,
-        scoring=scoring,
-        position=position,
+    if position and entity == "player":
+        await _ensure_positions()
+    return await anyio.to_thread.run_sync(
+        functools.partial(
+            _with_db,
+            tools.get_leaders,
+            stat,
+            season=season,
+            season_type=season_type,
+            per_mode=per_mode,
+            entity=entity,
+            team=team,
+            limit=limit,
+            min_games=min_games,
+            order=order,
+            teammates_out=teammates_out,
+            scoring=scoring,
+            position=position,
+        )
     )
 
 
