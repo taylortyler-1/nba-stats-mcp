@@ -19,7 +19,7 @@ import json
 import math
 import re
 import unicodedata
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Literal
@@ -321,29 +321,41 @@ def _norm_key(text: str) -> str:
     return re.sub(r"[\s_]+", " ", text.strip().lower())
 
 
-_LOOKUP: dict[str, Stat] = {}
-for _s in ALL_STATS:
-    for _key in (_s.name, _s.label, *_s.aliases):
-        _LOOKUP[_norm_key(_key)] = _s
+def _names(value: str | list[str] | None) -> list[str]:
+    """A list, or a comma-separated string, as stripped non-empty items."""
+    if not value:
+        return []
+    items = value if isinstance(value, list) else value.split(",")
+    return [s.strip() for s in items if s.strip()]
+
+
+def _alias_index[T](entries: Iterable[tuple[T, Iterable[str]]]) -> dict[str, T]:
+    """Map every normalized name / label / alias to its item."""
+    return {_norm_key(key): item for item, keys in entries for key in keys}
+
+
+def _did_you_mean[T](
+    key: str, lookup: Mapping[str, T], name: Callable[[T], str]
+) -> str:
+    """A ' Did you mean: ...?' hint naming the items closest to `key`, or ''."""
+    close = difflib.get_close_matches(key, list(lookup), n=3, cutoff=0.6)
+    if not close:
+        return ""
+    return f" Did you mean: {', '.join(sorted({name(lookup[c]) for c in close}))}?"
+
+
+_LOOKUP = _alias_index((s, (s.name, s.label, *s.aliases)) for s in ALL_STATS)
 
 
 def resolve_stats(stat: str | list[str]) -> list[Stat]:
-    names = stat if isinstance(stat, list) else stat.split(",")
     resolved: list[Stat] = []
-    for raw in names:
+    for raw in _names(stat):
         key = _norm_key(raw)
-        if not key:
-            continue
         found = _LOOKUP.get(key)
         if found is None:
-            close = difflib.get_close_matches(key, list(_LOOKUP), n=3, cutoff=0.6)
-            hint = (
-                f" Did you mean: {', '.join(sorted({_LOOKUP[c].name for c in close}))}?"
-                if close
-                else ""
-            )
+            hint = _did_you_mean(key, _LOOKUP, lambda s: s.name)
             raise ToolError(
-                f"Unknown stat {raw.strip()!r}.{hint} Call list_stats to see available stats."
+                f"Unknown stat {raw!r}.{hint} Call list_stats to see available stats."
             )
         if found not in resolved:
             resolved.append(found)
@@ -710,10 +722,9 @@ SCORING_TERMS: dict[str, ScoringTerm] = {
     )
 }
 
-_TERM_LOOKUP: dict[str, ScoringTerm] = {}
-for _t in SCORING_TERMS.values():
-    for _key in (_t.key, _t.label, *_t.aliases):
-        _TERM_LOOKUP[_norm_key(_key)] = _t
+_TERM_LOOKUP = _alias_index(
+    (t, (t.key, t.label, *t.aliases)) for t in SCORING_TERMS.values()
+)
 
 
 def parse_weights(weights: Any) -> dict[str, float]:
@@ -738,12 +749,7 @@ def parse_weights(weights: Any) -> dict[str, float]:
                     f"{raw!r} is a percentage; fantasy weights apply to per-game counts. "
                     "Weight makes and misses instead (e.g. fgm and fgmi, or fgm and fga)."
                 )
-            close = difflib.get_close_matches(key, list(_TERM_LOOKUP), n=3, cutoff=0.6)
-            hint = (
-                f" Did you mean: {', '.join(sorted({_TERM_LOOKUP[c].key for c in close}))}?"
-                if close
-                else ""
-            )
+            hint = _did_you_mean(key, _TERM_LOOKUP, lambda t: t.key)
             raise ToolError(
                 f"Unknown scoring stat {raw!r}.{hint} Weights can use: {', '.join(SCORING_TERMS)}."
             )
@@ -793,6 +799,15 @@ def _profile_name(name: str) -> str:
     return norm
 
 
+def _no_profile(name: str, profiles: Mapping[str, Any]) -> ToolError:
+    saved = (
+        f"Saved profiles: {', '.join(profiles)}."
+        if profiles
+        else "No profiles are saved."
+    )
+    return ToolError(f"No fantasy scoring profile named {name!r}. {saved}")
+
+
 def scoring_profiles(
     con: duckdb.DuckDBPyConnection | None,
 ) -> dict[str, dict[str, float]]:
@@ -821,12 +836,7 @@ def resolve_scoring(
         name = _profile_name(scoring)
         if name in profiles:
             return Scoring(name, profiles[name])
-        saved = (
-            f" Saved profiles: {', '.join(profiles)}."
-            if profiles
-            else " No profiles are saved."
-        )
-        raise ToolError(f"No fantasy scoring profile named {name!r}.{saved}")
+        raise _no_profile(name, profiles)
     if DEFAULT_PROFILE in profiles:
         return Scoring(DEFAULT_PROFILE, profiles[DEFAULT_PROFILE])
     if len(profiles) == 1:
@@ -865,8 +875,7 @@ def delete_fantasy_scoring(con: duckdb.DuckDBPyConnection, name: str) -> dict[st
     name = _profile_name(name)
     profiles = scoring_profiles(con)
     if name not in profiles:
-        saved = ", ".join(profiles) or "none"
-        raise ToolError(f"No scoring profile named {name!r}. Saved profiles: {saved}.")
+        raise _no_profile(name, profiles)
     con.execute("DELETE FROM fantasy_scoring WHERE name = ?", [name])
     return {"deleted": name, "profiles": [p for p in profiles if p != name]}
 
@@ -957,13 +966,6 @@ def _check_per_mode(entity: Entity, per_mode: PerMode) -> None:
         raise ToolError(
             "per_36 applies to players only; use per_game or totals for teams."
         )
-
-
-def _names(value: str | list[str] | None) -> list[str]:
-    if not value:
-        return []
-    items = value if isinstance(value, list) else value.split(",")
-    return [s.strip() for s in items if s.strip()]
 
 
 def _resolve_teammates(
