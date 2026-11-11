@@ -1,6 +1,6 @@
 # Hoops Stats MCP server
 
-An MCP server that answers NBA box-score questions — "Jokić's averages this season", "top 10 in 3P%", "Celtics' points per game in the playoffs" — from a local DuckDB database built from stats.nba.com game logs.
+An MCP server that answers NBA box-score questions — "Jokić's averages this season", "top 10 in 3P%", "Mavericks' points per game in the playoffs" — from a local DuckDB database built from stats.nba.com game logs.
 
 ## Setup
 

@@ -66,7 +66,7 @@ Returns (player):
   "season_type": "Regular Season",
   "per_mode": "per_game",
   "games_played": 12,
-  "opponent": "BOS",
+  "opponent": "DAL",
   "last_n_games": 5,
   "date_range": {"first": "2025-10-22", "last": "2025-11-09"},
   "stats": {"pts": {"label": "Points", "value": 29.4}}
@@ -94,11 +94,11 @@ Returns:
   "stat": "fg3_pct", "label": "3-Point %", "entity": "player",
   "season": "2025-26", "season_type": "Regular Season",
   "per_mode": "n/a (rate stat)", "order": "desc",
-  "team_filter": "BOS",
+  "team_filter": "DAL",
   "qualification": {"min_games": 7, "min_fg3a_per_game": 2},
   "qualified_count": 148,
   "leaders": [
-    {"rank": 1, "player": {"id": 1, "name": "..."}, "team": "BOS/LAL", "games_played": 12, "value": 0.452}
+    {"rank": 1, "player": {"id": 1, "name": "..."}, "team": "DAL/LAL", "games_played": 12, "value": 0.452}
   ]
 }
 ```
@@ -144,7 +144,7 @@ Zero playoff rows is normal before the playoffs start. Only one refresh runs at 
 
 The name returned is the most recent name in the data.
 
-**Teams** match on abbreviation (`BOS`), nickname (`Celtics`), full name (`Boston Celtics`), common nicknames (`sixers`, `cavs`, `mavs`, `dubs`, `clips`, ...), or a substring of the full name. A substring can match several teams (`"los angeles"` matches LAL and LAC), and the error then asks for the abbreviation.
+**Teams** match on abbreviation (`DAL`), nickname (`Mavericks`), full name (`Dallas Mavericks`), common nicknames (`sixers`, `cavs`, `mavs`, `dubs`, `clips`, ...), or a substring of the full name. A substring can match several teams (`"los angeles"` matches LAL and LAC), and the error then asks for the abbreviation.
 
 ## Errors
 

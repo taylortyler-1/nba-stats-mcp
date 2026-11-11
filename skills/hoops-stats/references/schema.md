@@ -37,8 +37,8 @@ One row per player per game they appeared in. Primary key: `(game_id, player_id)
 | `player_name` | VARCHAR | Name as recorded for that game |
 | `team_id` | BIGINT | Team the player played for **in this game** |
 | `team_abbreviation` | VARCHAR | Abbreviation as recorded that season |
-| `opponent_abbreviation` | VARCHAR | Parsed from the matchup (`"LAL @ BOS"` gives `BOS`) |
-| `is_home` | BOOLEAN | `"LAL vs. BOS"` means home; `"LAL @ BOS"` means away |
+| `opponent_abbreviation` | VARCHAR | Parsed from the matchup (`"LAL @ DAL"` gives `DAL`) |
+| `is_home` | BOOLEAN | `"LAL vs. DAL"` means home; `"LAL @ DAL"` means away |
 | `wl` | VARCHAR | `'W'` or `'L'` for the player's team |
 | `min`, `fgm`, `fga`, `fg3m`, `fg3a`, `ftm`, `fta`, `oreb`, `dreb`, `reb`, `ast`, `stl`, `blk`, `tov`, `pf`, `pts`, `plus_minus` | DOUBLE | Box-score stats for the game. See [stats.md](stats.md). |
 
@@ -52,11 +52,11 @@ Current franchises: one row each. Primary key: `team_id`.
 
 | Column | Example |
 | --- | --- |
-| `team_id` | `1610612738` |
-| `abbreviation` | `BOS` |
-| `full_name` | `Boston Celtics` |
-| `nickname` | `Celtics` |
-| `city` | `Boston` |
+| `team_id` | `1610612742` |
+| `abbreviation` | `DAL` |
+| `full_name` | `Dallas Mavericks` |
+| `nickname` | `Mavericks` |
+| `city` | `Dallas` |
 
 ### `ingest_log`
 
@@ -70,7 +70,7 @@ One row per `(entity, season, season_type)` that has been downloaded. Columns: `
 
 ## Caveats
 
-- **Traded players** have rows under each team they played for. Season totals combine all teams. `get_stat(player=..., team=...)` isolates one stint, and leaderboards show `"BOS/LAL"`.
+- **Traded players** have rows under each team they played for. Season totals combine all teams. `get_stat(player=..., team=...)` isolates one stint, and leaderboards show `"DAL/LAL"`.
 - **Missed games have no rows.** Games played counts only games the player appeared in. Nothing in the data tells injuries apart from coach's decisions.
 - **Play-in games aren't loaded.** stats.nba.com treats them as a separate season type. Preseason and the All-Star Game aren't loaded either.
 - **Abbreviations are as recorded each season.** The `opponent` filter compares the current abbreviation with `opponent_abbreviation`, so in seasons before a franchise changed its abbreviation, its games won't match. Examples: `NJN`→`BKN` in 2012, `NOH`→`NOP` in 2013. `team_id` is stable, so the `team` filter is unaffected.

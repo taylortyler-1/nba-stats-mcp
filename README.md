@@ -1,6 +1,6 @@
 # Hoops Stats
 
-Ask Claude about NBA player and team stats and get answers computed from real box scores: "What's Jokić averaging this season?", "Who leads the league in 3P%?", "How has Tatum played in his last 10 games?", "Celtics points per game in the playoffs".
+Ask Claude about NBA player and team stats and get answers computed from real box scores: "What's Jokić averaging this season?", "Who leads the league in 3P%?", "How has Cooper Flagg played in his last 10 games?", "Mavericks points per game in the playoffs".
 
 The plugin adds an MCP server with four tools and a skill that teaches Claude how to use them:
 
