@@ -1,0 +1,14 @@
+{
+  "name": "hoops-stats",
+  "owner": {
+    "name": "Taylor Tyler"
+  },
+  "description": "The Hoops Stats plugin for Claude.",
+  "plugins": [
+    {
+      "name": "hoops-stats",
+      "source": "./",
+      "description": "NBA player and team box-score stats from a local database."
+    }
+  ]
+}

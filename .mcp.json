@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "hoops-stats": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--frozen",
+        "--directory",
+        "${CLAUDE_PLUGIN_ROOT}/server",
+        "${CLAUDE_PLUGIN_ROOT}/server/src/nba_mcp/__main__.py"
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "hoops-stats",
+  "displayName": "Hoops Stats",
+  "version": "0.1.0",
+  "description": "Ask about NBA player and team stats — averages, shooting percentages, leaderboards, splits by opponent or recent games — answered from box scores downloaded from stats.nba.com into a local database.",
+  "author": {
+    "name": "Taylor Tyler"
+  },
+  "license": "MIT",
+  "keywords": ["nba", "basketball", "sports", "stats"]
+}
