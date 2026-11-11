@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS ingest_log (
     loaded_at   TIMESTAMP NOT NULL DEFAULT current_timestamp,
     PRIMARY KEY (entity, season, season_type)
 );
+
+-- User-saved fantasy scoring weights, one profile per row. Not touched by refresh_data.
+CREATE TABLE IF NOT EXISTS fantasy_scoring (
+    name       VARCHAR PRIMARY KEY,
+    weights    VARCHAR NOT NULL,  -- JSON object: scoring term -> points
+    updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp
+);
 """
 
 

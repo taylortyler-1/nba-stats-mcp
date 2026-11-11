@@ -7,16 +7,21 @@ opponent, last N games, a single team stint -- without precomputed tables.
 
 To add a stat, add a `Stat` to `STATS`. To add advanced stats later, add their
 base columns to the ingest and schema, then register stats that use them.
+
+Fantasy points (`fpts`) work the same way: the scoring weights become a per-game
+SQL expression that is summed like any other column.
 """
 
 from __future__ import annotations
 
 import difflib
+import json
 import math
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Literal
 
 import duckdb
@@ -219,13 +224,24 @@ STATS: dict[str, Stat] = {
 
 assert all(s.column in STAT_COLUMNS for s in STATS.values() if s.column)
 
+# Fantasy points: a counting stat over the per-game `fpts` expression that
+# `Scoring.sql()` builds. Only available when a scoring is resolved.
+FPTS = Stat(
+    "fpts",
+    "Fantasy Points",
+    "Points under the fantasy scoring weights (the scoring parameter, or the saved profile).",
+    "fantasy",
+    ("fantasy points", "fantasy", "fp", "fpts per game", "fantasy pts"),
+    column="fpts",
+)
+
 
 def _norm_key(text: str) -> str:
     return re.sub(r"[\s_]+", " ", text.strip().lower())
 
 
 _LOOKUP: dict[str, Stat] = {}
-for _s in STATS.values():
+for _s in (*STATS.values(), FPTS):
     for _key in (_s.name, _s.label, *_s.aliases):
         _LOOKUP[_norm_key(_key)] = _s
 
@@ -445,18 +461,272 @@ def _player_list(rows: list[tuple[Any, ...]]) -> str:
     return ", ".join(f"{name} ({team}, id {pid})" for pid, name, team in rows)
 
 
+# --------------------------------------------------------------------------- fantasy scoring
+
+DEFAULT_PROFILE = "default"
+
+NO_SCORING = (
+    "No fantasy scoring is set up. Ask the user for their league's points per stat "
+    "(for example pts 1, reb 1.2, ast 1.5, stl 3, blk 3, tov -1), save it with "
+    "save_fantasy_scoring, then retry. For a one-off, pass the weights inline as scoring={...}."
+)
+
+
+@dataclass(frozen=True)
+class ScoringTerm:
+    """Something a fantasy weight can apply to: a per-game SQL expression."""
+
+    key: str
+    label: str
+    sql: str
+    aliases: tuple[str, ...] = ()
+
+
+def _col(c: str) -> str:
+    return f"COALESCE({c}, 0)"
+
+
+_DOUBLE_CATEGORIES = ("pts", "reb", "ast", "stl", "blk")
+_TENS = " + ".join(f"({_col(c)} >= 10)::INTEGER" for c in _DOUBLE_CATEGORIES)
+
+SCORING_TERMS: dict[str, ScoringTerm] = {
+    t.key: t
+    for t in (
+        *(
+            ScoringTerm(s.name, s.label, _col(s.name), (s.label, *s.aliases))
+            for s in STATS.values()
+            if not s.is_rate
+        ),
+        ScoringTerm(
+            "fgmi",
+            "Field Goals Missed",
+            f"({_col('fga')} - {_col('fgm')})",
+            ("field goals missed", "fg missed", "missed fg", "fg miss", "fgmiss"),
+        ),
+        ScoringTerm(
+            "fg3mi",
+            "3-Pointers Missed",
+            f"({_col('fg3a')} - {_col('fg3m')})",
+            ("3 pointers missed", "3pt missed", "3p missed", "missed threes", "3pmi"),
+        ),
+        ScoringTerm(
+            "ftmi",
+            "Free Throws Missed",
+            f"({_col('fta')} - {_col('ftm')})",
+            ("free throws missed", "ft missed", "missed ft", "ft miss", "ftmiss"),
+        ),
+        ScoringTerm(
+            "dd",
+            "Double-Double",
+            f"(CASE WHEN {_TENS} >= 2 THEN 1 ELSE 0 END)",
+            ("double-double", "double double", "dbl dbl", "dbldbl"),
+        ),
+        ScoringTerm(
+            "td",
+            "Triple-Double",
+            f"(CASE WHEN {_TENS} >= 3 THEN 1 ELSE 0 END)",
+            ("triple-double", "triple double", "trp dbl", "tpldbl"),
+        ),
+    )
+}
+
+_TERM_LOOKUP: dict[str, ScoringTerm] = {}
+for _t in SCORING_TERMS.values():
+    for _key in (_t.key, _t.label, *_t.aliases):
+        _TERM_LOOKUP[_norm_key(_key)] = _t
+
+
+def parse_weights(weights: Any) -> dict[str, float]:
+    """Validate user weights and map their keys (names, labels, aliases) to scoring terms."""
+    if isinstance(weights, str):
+        try:
+            weights = json.loads(weights)
+        except ValueError:
+            pass
+    if not isinstance(weights, Mapping) or not weights:
+        raise ToolError(
+            "Scoring weights must be a non-empty object like {'pts': 1, 'reb': 1.2, 'tov': -1}."
+        )
+    out: dict[str, float] = {}
+    for raw, value in weights.items():
+        key = _norm_key(str(raw))
+        term = _TERM_LOOKUP.get(key)
+        if term is None:
+            stat = _LOOKUP.get(key)
+            if stat is not None and stat.is_rate:
+                raise ToolError(
+                    f"{raw!r} is a percentage; fantasy weights apply to per-game counts. "
+                    "Weight makes and misses instead (e.g. fgm and fgmi, or fgm and fga)."
+                )
+            close = difflib.get_close_matches(key, list(_TERM_LOOKUP), n=3, cutoff=0.6)
+            hint = (
+                f" Did you mean: {', '.join(sorted({_TERM_LOOKUP[c].key for c in close}))}?"
+                if close
+                else ""
+            )
+            raise ToolError(
+                f"Unknown scoring stat {raw!r}.{hint} Weights can use: {', '.join(SCORING_TERMS)}."
+            )
+        if isinstance(value, bool):
+            raise ToolError(f"Weight for {raw!r} must be a number, got {value!r}.")
+        try:
+            w = float(value)
+        except (TypeError, ValueError):
+            raise ToolError(
+                f"Weight for {raw!r} must be a number, got {value!r}."
+            ) from None
+        if not math.isfinite(w):
+            raise ToolError(f"Weight for {raw!r} must be a finite number.")
+        if term.key in out:
+            raise ToolError(
+                f"{raw!r} repeats the weight for {term.key}; give each stat once."
+            )
+        if w != 0:
+            out[term.key] = w
+    if not out:
+        raise ToolError("Every scoring weight is zero.")
+    return out
+
+
+@dataclass(frozen=True)
+class Scoring:
+    name: str | None  # saved profile name; None for inline weights
+    weights: dict[str, float]
+
+    def sql(self) -> str:
+        """Per-game fantasy points as a SQL expression over a games table's columns."""
+        return " + ".join(
+            f"({w!r}) * {SCORING_TERMS[k].sql}" for k, w in self.weights.items()
+        )
+
+    def out(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"weights": self.weights}
+        if self.name:
+            result = {"profile": self.name, **result}
+        return result
+
+
+def _profile_name(name: str) -> str:
+    norm = re.sub(r"\s+", " ", name.strip().lower())
+    if not norm or len(norm) > 40:
+        raise ToolError("Scoring profile names must be 1-40 characters.")
+    return norm
+
+
+def scoring_profiles(
+    con: duckdb.DuckDBPyConnection | None,
+) -> dict[str, dict[str, float]]:
+    """Saved scoring profiles by name. Databases created before profiles existed have none."""
+    if con is None or not _scalar(
+        con,
+        "SELECT COUNT(*) FROM duckdb_tables() WHERE table_name = 'fantasy_scoring'",
+    ):
+        return {}
+    return {
+        name: json.loads(weights)
+        for name, weights in con.execute(
+            "SELECT name, weights FROM fantasy_scoring ORDER BY name"
+        ).fetchall()
+    }
+
+
+def resolve_scoring(
+    con: duckdb.DuckDBPyConnection, scoring: str | Mapping[str, Any] | None
+) -> Scoring:
+    """Inline weights, a saved profile by name, or (None) the default saved profile."""
+    # Some clients send an object argument as a JSON string.
+    if isinstance(scoring, Mapping) or (
+        isinstance(scoring, str) and scoring.strip().startswith("{")
+    ):
+        return Scoring(None, parse_weights(scoring))
+    profiles = scoring_profiles(con)
+    if scoring is not None:
+        name = _profile_name(scoring)
+        if name in profiles:
+            return Scoring(name, profiles[name])
+        saved = (
+            f" Saved profiles: {', '.join(profiles)}."
+            if profiles
+            else " No profiles are saved."
+        )
+        raise ToolError(f"No fantasy scoring profile named {name!r}.{saved}")
+    if DEFAULT_PROFILE in profiles:
+        return Scoring(DEFAULT_PROFILE, profiles[DEFAULT_PROFILE])
+    if len(profiles) == 1:
+        name, weights = next(iter(profiles.items()))
+        return Scoring(name, weights)
+    if profiles:
+        raise ToolError(
+            f"Several scoring profiles are saved ({', '.join(profiles)}) and none is "
+            "'default'. Pass scoring='<name>'."
+        )
+    raise ToolError(NO_SCORING)
+
+
+def save_fantasy_scoring(
+    con: duckdb.DuckDBPyConnection,
+    weights: Mapping[str, Any],
+    name: str = DEFAULT_PROFILE,
+) -> dict[str, Any]:
+    """Create or replace a scoring profile. `con` must be a write connection."""
+    parsed = parse_weights(weights)
+    name = _profile_name(name)
+    con.execute(
+        "INSERT OR REPLACE INTO fantasy_scoring (name, weights, updated_at) "
+        "VALUES (?, ?, current_timestamp)",
+        [name, json.dumps(parsed)],
+    )
+    return {
+        "saved": name,
+        "weights": parsed,
+        "labels": {k: SCORING_TERMS[k].label for k in parsed},
+        "profiles": list(scoring_profiles(con)),
+    }
+
+
+def delete_fantasy_scoring(con: duckdb.DuckDBPyConnection, name: str) -> dict[str, Any]:
+    name = _profile_name(name)
+    profiles = scoring_profiles(con)
+    if name not in profiles:
+        saved = ", ".join(profiles) or "none"
+        raise ToolError(f"No scoring profile named {name!r}. Saved profiles: {saved}.")
+    con.execute("DELETE FROM fantasy_scoring WHERE name = ?", [name])
+    return {"deleted": name, "profiles": [p for p in profiles if p != name]}
+
+
 # --------------------------------------------------------------------------- aggregation
 
-_SUMS_SQL = ", ".join(f"SUM({c}) AS {c}" for c in STAT_COLUMNS)
+
+def _sums_sql(scoring: Scoring | None = None) -> str:
+    sql = ", ".join(f"SUM({c}) AS {c}" for c in STAT_COLUMNS)
+    if scoring is not None:
+        sql += f", SUM({scoring.sql()}) AS fpts"
+    return sql
+
+
+# A teammate "played" in a game if they have a box-score row for the same team.
+_TEAMMATE_PLAYED = (
+    "EXISTS (SELECT 1 FROM player_games tm WHERE tm.game_id = {t}.game_id "
+    "AND tm.team_id = {t}.team_id AND tm.player_id = ?)"
+)
+# ...and was on that team at some point in that season, so "without X" doesn't
+# count games for teams X never played for.
+_TEAMMATE_ON_TEAM = (
+    "EXISTS (SELECT 1 FROM player_games tm WHERE tm.player_id = ? "
+    "AND tm.team_id = {t}.team_id AND tm.season = {t}.season)"
+)
 
 
 def _where(
     seasons: list[str],
     season_type: str,
     *,
+    table: str = "player_games",
     player_id: int | None = None,
     team_id: int | None = None,
     opponent: str | None = None,
+    teammates_out: Sequence[Player] = (),
+    teammates_in: Sequence[Player] = (),
 ) -> tuple[str, list[Any]]:
     clauses = [f"season IN ({', '.join('?' * len(seasons))})", "season_type = ?"]
     params: list[Any] = [*seasons, season_type]
@@ -469,6 +739,13 @@ def _where(
     if opponent is not None:
         clauses.append("opponent_abbreviation = ?")
         params.append(opponent)
+    for p in teammates_in:
+        clauses.append(_TEAMMATE_PLAYED.format(t=table))
+        params.append(p.player_id)
+    for p in teammates_out:
+        clauses.append(f"NOT {_TEAMMATE_PLAYED.format(t=table)}")
+        clauses.append(_TEAMMATE_ON_TEAM.format(t=table))
+        params += [p.player_id, p.player_id]
     return " AND ".join(clauses), params
 
 
@@ -486,7 +763,7 @@ def stat_value(stat: Stat, sums: Sums, games: int, per_mode: PerMode) -> float |
     )  # every non-formula stat is a counting stat with a column
     total = sums[stat.column] or 0.0
     if per_mode == "totals":
-        return round(total, 1) if stat.column == "min" else int(total)
+        return round(total, 1) if stat.column in ("min", "fpts") else int(total)
     if per_mode == "per_game":
         return round(total / games, 1) if games else None
     minutes = sums["min"]
@@ -500,13 +777,130 @@ def _check_per_mode(entity: Entity, per_mode: PerMode) -> None:
         )
 
 
+def _names(value: str | list[str] | None) -> list[str]:
+    if not value:
+        return []
+    items = value if isinstance(value, list) else value.split(",")
+    return [s.strip() for s in items if s.strip()]
+
+
+def _resolve_teammates(
+    con: duckdb.DuckDBPyConnection,
+    subject: Player | None,
+    teammates_out: str | list[str] | None,
+    teammates_in: str | list[str] | None,
+) -> tuple[list[Player], list[Player]]:
+    out = [resolve_player(con, q) for q in _names(teammates_out)]
+    in_ = [resolve_player(con, q) for q in _names(teammates_in)]
+    ids = [p.player_id for p in out + in_]
+    if subject is not None and subject.player_id in ids:
+        raise ToolError(
+            f"{subject.name} can't be their own teammate filter; list other players."
+        )
+    if len(ids) != len(set(ids)):
+        raise ToolError(
+            "A player appears more than once in teammates_out / teammates_in."
+        )
+    return out, in_
+
+
+@dataclass
+class _Scope:
+    """The resolved filters shared by get_stat and get_game_log."""
+
+    entity: Entity
+    table: str
+    seasons: list[str]
+    subject: Player | None
+    team: Team | None
+    opponent: Team | None
+    teammates_out: list[Player]
+    teammates_in: list[Player]
+    where: str
+    params: list[Any]
+
+    def header(self, season_type: str) -> dict[str, Any]:
+        h: dict[str, Any] = {}
+        if self.subject:
+            h["player"] = self.subject.out()
+            if self.team:
+                h["team_filter"] = self.team.abbreviation
+        else:
+            h["team"] = self.team.out()  # type: ignore[union-attr]
+        h |= {"season": _season_out(self.seasons), "season_type": season_type}
+        if self.opponent:
+            h["opponent"] = self.opponent.abbreviation
+        if self.teammates_out:
+            h["teammates_out"] = [p.name for p in self.teammates_out]
+        if self.teammates_in:
+            h["teammates_in"] = [p.name for p in self.teammates_in]
+        return h
+
+
+def _scope(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    player: str | None,
+    team: str | None,
+    season: str | None,
+    season_type: str,
+    opponent: str | None,
+    teammates_out: str | list[str] | None,
+    teammates_in: str | list[str] | None,
+) -> _Scope:
+    if not player and not team:
+        raise ToolError("Pass a player or a team.")
+    entity: Entity = "player" if player else "team"
+    seasons = season_scope(con, season, season_type)
+    subject = resolve_player(con, player) if player else None
+    team_obj = resolve_team(con, team) if team else None
+    opp = resolve_team(con, opponent) if opponent else None
+    out, in_ = _resolve_teammates(con, subject, teammates_out, teammates_in)
+    table = "player_games" if entity == "player" else "team_games"
+    where, params = _where(
+        seasons,
+        season_type,
+        table=table,
+        player_id=subject.player_id if subject else None,
+        team_id=team_obj.team_id if team_obj else None,
+        opponent=opp.abbreviation if opp else None,
+        teammates_out=out,
+        teammates_in=in_,
+    )
+    return _Scope(
+        entity, table, seasons, subject, team_obj, opp, out, in_, where, params
+    )
+
+
+_TEAMMATE_NOTE = (
+    "Teammate filters use box scores: a player with no box-score row for a game "
+    "(injured, rested, DNP, or not yet with the team) counts as out."
+)
+
+
+def _with_fpts(
+    con: duckdb.DuckDBPyConnection,
+    stats: list[Stat],
+    scoring: str | Mapping[str, Any] | None,
+    need: bool = False,
+) -> Scoring | None:
+    """Resolve scoring when fpts is requested (or `need`); add fpts to `stats` if scoring was passed."""
+    if (scoring is not None or need) and FPTS not in stats:
+        stats.append(FPTS)
+    return resolve_scoring(con, scoring) if FPTS in stats else None
+
+
+def _week_start(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
 # --------------------------------------------------------------------------- tools
 
 
 def list_stats(
     con: duckdb.DuckDBPyConnection | None, category: str | None = None
 ) -> dict[str, Any]:
-    stats = list(STATS.values())
+    stats = [*STATS.values(), FPTS]
     if category:
         cats = {s.category for s in stats}
         if category.lower() not in cats:
@@ -522,6 +916,12 @@ def list_stats(
             "per_36": "Per 36 minutes played (players only).",
         },
         "notes": "Rate stats (percentages) are computed from summed makes/attempts and ignore per_mode.",
+        "fantasy": {
+            "scoring_terms": {k: t.label for k, t in SCORING_TERMS.items()},
+            "saved_profiles": scoring_profiles(con),
+            "notes": "dd/td are per-game bonuses (10+ in two/three of pts, reb, ast, stl, blk); "
+            "a triple-double also earns the dd bonus.",
+        },
         "data": coverage(con)
         if con is not None
         else "No data loaded yet; call refresh_data to download it.",
@@ -538,28 +938,29 @@ def get_stat(
     per_mode: PerMode = "per_game",
     last_n_games: int | None = None,
     opponent: str | None = None,
+    teammates_out: str | list[str] | None = None,
+    teammates_in: str | list[str] | None = None,
+    scoring: str | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     stats = resolve_stats(stat)
     if not player and not team:
         raise ToolError("Pass a player or a team.")
-    entity: Entity = "player" if player else "team"
-    _check_per_mode(entity, per_mode)
+    _check_per_mode("player" if player else "team", per_mode)
     if last_n_games is not None and last_n_games < 1:
         raise ToolError("last_n_games must be at least 1.")
+    fantasy = _with_fpts(con, stats, scoring)
 
-    seasons = season_scope(con, season, season_type)
-    subject = resolve_player(con, player) if player else None
-    team_obj = resolve_team(con, team) if team else None
-    opp = resolve_team(con, opponent) if opponent else None
-
-    where, params = _where(
-        seasons,
-        season_type,
-        player_id=subject.player_id if subject else None,
-        team_id=team_obj.team_id if team_obj else None,
-        opponent=opp.abbreviation if opp else None,
+    sc = _scope(
+        con,
+        player=player,
+        team=team,
+        season=season,
+        season_type=season_type,
+        opponent=opponent,
+        teammates_out=teammates_out,
+        teammates_in=teammates_in,
     )
-    table = "player_games" if entity == "player" else "team_games"
+    params = list(sc.params)
     limit = ""
     if last_n_games is not None:
         limit = "LIMIT ?"
@@ -567,8 +968,9 @@ def get_stat(
     row = _rows_as_dicts(
         con.execute(
             f"""
-            WITH g AS (SELECT * FROM {table} WHERE {where} ORDER BY game_date DESC {limit})
-            SELECT COUNT(*) AS gp, MIN(game_date) AS first_game, MAX(game_date) AS last_game, {_SUMS_SQL}
+            WITH g AS (SELECT * FROM {sc.table} WHERE {sc.where} ORDER BY game_date DESC {limit})
+            SELECT COUNT(*) AS gp, MIN(game_date) AS first_game, MAX(game_date) AS last_game,
+                   {_sums_sql(fantasy)}
             FROM g
             """,
             params,
@@ -576,23 +978,14 @@ def get_stat(
     )[0]
     gp = row["gp"]
 
-    result: dict[str, Any] = {}
-    if subject:
-        result["player"] = subject.out()
-        if team_obj:
-            result["team_filter"] = team_obj.abbreviation
-    else:
-        result["team"] = team_obj.out()  # type: ignore[union-attr]
-    result |= {
-        "season": _season_out(seasons),
-        "season_type": season_type,
-        "per_mode": per_mode,
-        "games_played": gp,
-    }
-    if opp:
-        result["opponent"] = opp.abbreviation
+    result = sc.header(season_type)
+    result |= {"per_mode": per_mode, "games_played": gp}
     if last_n_games is not None:
         result["last_n_games"] = last_n_games
+    if fantasy:
+        result["scoring"] = fantasy.out()
+    if sc.teammates_out or sc.teammates_in:
+        result["teammate_note"] = _TEAMMATE_NOTE
     if gp == 0:
         result["stats"] = {}
         result["note"] = "No games match these filters."
@@ -608,6 +1001,162 @@ def get_stat(
     return result
 
 
+DEFAULT_LOG_STATS = (
+    "min",
+    "pts",
+    "reb",
+    "ast",
+    "stl",
+    "blk",
+    "tov",
+    "fg3m",
+    "fgm",
+    "fga",
+    "ftm",
+    "fta",
+)
+
+
+def get_game_log(
+    con: duckdb.DuckDBPyConnection,
+    player: str | None = None,
+    team: str | None = None,
+    stat: str | list[str] | None = None,
+    season: str | None = None,
+    season_type: SeasonType = "Regular Season",
+    last_n_games: int | None = None,
+    opponent: str | None = None,
+    teammates_out: str | list[str] | None = None,
+    teammates_in: str | list[str] | None = None,
+    scoring: str | Mapping[str, Any] | None = None,
+    sort_by: str = "date",
+    order: Literal["desc", "asc"] = "desc",
+    limit: int = 25,
+    best_n_per_week: int | None = None,
+) -> dict[str, Any]:
+    stats = resolve_stats(list(DEFAULT_LOG_STATS) if not stat else stat)
+    if last_n_games is not None and last_n_games < 1:
+        raise ToolError("last_n_games must be at least 1.")
+    if best_n_per_week is not None and best_n_per_week < 1:
+        raise ToolError("best_n_per_week must be at least 1.")
+    sort_stat: Stat | None = None
+    if _norm_key(sort_by) not in ("date", "game date"):
+        sorted_by = resolve_stats(sort_by)
+        if len(sorted_by) != 1:
+            raise ToolError("sort_by takes one stat (or 'date').")
+        sort_stat = sorted_by[0]
+        if sort_stat not in stats:
+            stats.append(sort_stat)
+    fantasy = _with_fpts(con, stats, scoring, need=best_n_per_week is not None)
+    limit = max(1, min(limit, 100))
+
+    sc = _scope(
+        con,
+        player=player,
+        team=team,
+        season=season,
+        season_type=season_type,
+        opponent=opponent,
+        teammates_out=teammates_out,
+        teammates_in=teammates_in,
+    )
+    params = list(sc.params)
+    last_n = ""
+    if last_n_games is not None:
+        last_n = "LIMIT ?"
+        params.append(last_n_games)
+    fpts_col = f", {fantasy.sql()} AS fpts" if fantasy else ""
+    rows = _rows_as_dicts(
+        con.execute(
+            f"""
+            SELECT game_date, team_abbreviation, opponent_abbreviation, is_home, wl,
+                   {", ".join(STAT_COLUMNS)} {fpts_col}
+            FROM {sc.table} WHERE {sc.where}
+            ORDER BY game_date DESC {last_n}
+            """,
+            params,
+        )
+    )
+
+    games = []
+    for r in rows:
+        g: dict[str, Any] = {
+            "date": r["game_date"].isoformat(),
+            "team": r["team_abbreviation"],
+            "matchup": ("vs " if r["is_home"] else "@ ") + r["opponent_abbreviation"],
+            "wl": r["wl"],
+        }
+        for s in stats:
+            g[s.name] = stat_value(s, r, 1, "totals")
+        games.append((r["game_date"], g))
+
+    if sort_stat is None:
+        games.sort(key=lambda x: x[0], reverse=(order == "desc"))
+    else:
+        # Games without a value (0 attempts for a percentage) go last either way.
+        with_value = [x for x in games if x[1][sort_stat.name] is not None]
+        without = [x for x in games if x[1][sort_stat.name] is None]
+        with_value.sort(key=lambda x: x[1][sort_stat.name], reverse=(order == "desc"))
+        games = with_value + without
+
+    result = sc.header(season_type)
+    result |= {
+        "games_matched": len(games),
+        "games_shown": min(limit, len(games)),
+        "sorted_by": f"{'date' if sort_stat is None else sort_stat.name} {order}",
+    }
+    if last_n_games is not None:
+        result["last_n_games"] = last_n_games
+    if fantasy:
+        result["scoring"] = fantasy.out()
+    if sc.teammates_out or sc.teammates_in:
+        result["teammate_note"] = _TEAMMATE_NOTE
+    if not games:
+        result["games"] = []
+        result["note"] = "No games match these filters."
+        return result
+    dates = [d for d, _ in games]
+    result["date_range"] = {
+        "first": min(dates).isoformat(),
+        "last": max(dates).isoformat(),
+    }
+
+    if best_n_per_week is not None:
+        result["weekly_best"] = _weekly_best(
+            [(d, g["fpts"]) for d, g in games], best_n_per_week
+        )
+    result["games"] = [g for _, g in games[:limit]]
+    return result
+
+
+def _weekly_best(games: list[tuple[date, float]], n: int) -> dict[str, Any]:
+    """Each Monday-Sunday week's best n fantasy games, for lock-in / best-N leagues."""
+    by_week: dict[date, list[float]] = {}
+    for d, fpts in games:
+        by_week.setdefault(_week_start(d), []).append(fpts)
+    weeks = []
+    for start in sorted(by_week):
+        best = sorted(by_week[start], reverse=True)[:n]
+        weeks.append(
+            {
+                "week_of": start.isoformat(),
+                "games": len(by_week[start]),
+                "best_fpts": best,
+                "total": round(sum(best), 1),
+            }
+        )
+    counted = [f for w in weeks for f in w["best_fpts"]]
+    return {
+        "n": n,
+        "week_definition": "Monday-Sunday",
+        "weeks": len(weeks),
+        "avg_weekly_total": round(sum(w["total"] for w in weeks) / len(weeks), 1),
+        "avg_counted_game": round(sum(counted) / len(counted), 1),
+        "weeks_with_fewer_than_n_games": sum(1 for w in weeks if w["games"] < n),
+        "by_week": weeks,
+    }
+
+
 def get_leaders(
     con: duckdb.DuckDBPyConnection,
     stat: str,
@@ -619,11 +1168,16 @@ def get_leaders(
     limit: int = 10,
     min_games: int | None = None,
     order: Literal["desc", "asc"] = "desc",
+    teammates_out: str | list[str] | None = None,
+    scoring: str | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved = resolve_stats(stat)
     if len(resolved) != 1:
         raise ToolError("get_leaders ranks one stat at a time.")
     s = resolved[0]
+    if scoring is not None and s is not FPTS:
+        raise ToolError("scoring applies only to stat='fpts'.")
+    fantasy = resolve_scoring(con, scoring) if s is FPTS else None
     _check_per_mode(entity, per_mode)
     if entity == "team" and team:
         raise ToolError(
@@ -633,21 +1187,26 @@ def get_leaders(
 
     seasons = season_scope(con, season, season_type)
     team_obj = resolve_team(con, team) if team else None
+    out, _ = _resolve_teammates(con, None, teammates_out, None)
+    if out and entity == "team":
+        raise ToolError("teammates_out ranks players; omit it when entity='team'.")
+    team_id = team_obj.team_id if team_obj else None
+    table = "player_games" if entity == "player" else "team_games"
     where, params = _where(
-        seasons, season_type, team_id=team_obj.team_id if team_obj else None
+        seasons, season_type, table=table, team_id=team_id, teammates_out=out
     )
 
     if entity == "player":
         group_sql = f"""
             SELECT player_id AS id, arg_max(player_name, game_date) AS name,
                    string_agg(DISTINCT team_abbreviation, '/' ORDER BY team_abbreviation) AS team,
-                   COUNT(*) AS gp, {_SUMS_SQL}
+                   COUNT(*) AS gp, {_sums_sql(fantasy)}
             FROM player_games WHERE {where} GROUP BY player_id
         """
     else:
         group_sql = f"""
             SELECT team_id AS id, arg_max(team_abbreviation, game_date) AS name, NULL AS team,
-                   COUNT(*) AS gp, {_SUMS_SQL}
+                   COUNT(*) AS gp, {_sums_sql(fantasy)}
             FROM team_games WHERE {where} GROUP BY team_id
         """
     rows = _rows_as_dicts(con.execute(group_sql, params))
@@ -657,8 +1216,14 @@ def get_leaders(
     qualification: dict[str, Any] = {}
     if entity == "player":
         if min_games is None and (s.is_rate or per_mode != "totals"):
+            # Same filters on team games, so a "without X" leaderboard scales to
+            # the games X's teams played without X.
             twhere, tparams = _where(
-                seasons, season_type, team_id=team_obj.team_id if team_obj else None
+                seasons,
+                season_type,
+                table="team_games",
+                team_id=team_id,
+                teammates_out=out,
             )
             max_gp = _scalar(
                 con,
@@ -680,9 +1245,9 @@ def get_leaders(
             return False
         if s.is_rate and s.volume and (r[s.volume] or 0) < s.min_volume_per_game * gp:
             return False
-        if "min_minutes_per_game" in qualification and (r["min"] or 0) < 15 * gp:
-            return False
-        return True
+        return not (
+            "min_minutes_per_game" in qualification and (r["min"] or 0) < 15 * gp
+        )
 
     scored = []
     for r in rows:
@@ -716,8 +1281,16 @@ def get_leaders(
         "per_mode": "n/a (rate stat)" if s.is_rate else per_mode,
         "order": order,
     }
+    if fantasy:
+        result["scoring"] = fantasy.out()
     if team_obj:
         result["team_filter"] = team_obj.abbreviation
+    if out:
+        result["teammates_out"] = [p.name for p in out]
+        result["teammate_note"] = (
+            _TEAMMATE_NOTE + " Only those players' teammates in the seasons they "
+            "were on the team are ranked."
+        )
     if qualification:
         result["qualification"] = qualification
     result["qualified_count"] = len(scored)

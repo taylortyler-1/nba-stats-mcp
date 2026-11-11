@@ -49,7 +49,7 @@ def team_row(team, opp, home, gdate, gid, **stats):
 
 
 @pytest.fixture
-def con(tmp_path):
+def db_file(tmp_path):
     path = tmp_path / "test.duckdb"
     with db.connect(read_only=False, path=path) as w:
         w.executemany("INSERT INTO teams VALUES (?, ?, ?, ?, ?)", TEAMS)
@@ -147,6 +147,18 @@ def con(tmp_path):
                     fg3m=1,
                     fg3a=1,
                 ),
+                # Jokić's teammate, who plays only g3 -> "without Reaves" is g1 + g2.
+                player_row(
+                    4,
+                    "Austin Reaves",
+                    "LAL",
+                    "BOS",
+                    False,
+                    "2025-11-05",
+                    "g3",
+                    min=30,
+                    pts=10,
+                ),
             ]
         )
         teams = pd.DataFrame(
@@ -222,7 +234,12 @@ def con(tmp_path):
         for entity, raw in (("player", players), ("team", teams)):
             df = ingest.transform_game_log(raw, entity, "2025-26", "Regular Season")
             ingest.replace_games(w, entity, "2025-26", "Regular Season", df)
-    with db.connect(read_only=True, path=path) as r:
+    return path
+
+
+@pytest.fixture
+def con(db_file):
+    with db.connect(read_only=True, path=db_file) as r:
         yield r
 
 
@@ -308,7 +325,7 @@ def test_leaders_and_qualification(con):
     assert [e["player"]["name"] for e in r["leaders"]] == ["Nikola Jokić"]
 
     r = tools.get_leaders(con, "pts", min_games=1)
-    assert [e["player"]["id"] for e in r["leaders"]] == [2, 1, 3]
+    assert [e["player"]["id"] for e in r["leaders"]] == [2, 1, 4, 3]
 
     # Seth's 1-for-1 from three fails the 2 3PA/game volume minimum.
     r = tools.get_leaders(con, "fg3_pct", min_games=1)
@@ -320,4 +337,181 @@ def test_team_leaders_and_list_stats(con):
     assert [e["team"] for e in r["leaders"]] == ["LAL", "BOS", "GSW"]
     listed = tools.list_stats(con)
     assert listed["data"]["seasons"] == {"Regular Season": ["2025-26"]}
-    assert {s["name"] for s in listed["stats"]} == set(tools.STATS)
+    assert {s["name"] for s in listed["stats"]} == {*tools.STATS, "fpts"}
+    assert listed["fantasy"]["saved_profiles"] == {}
+
+
+# --------------------------------------------------------------------------- fantasy
+
+YAHOO = {"pts": 1, "reb": 1.2, "ast": 1.5, "stl": 3, "blk": 3, "tov": -1}
+# Jokić per game under YAHOO: g1 59.4, g2 44.0, g3 74.8.
+
+
+def test_parse_weights_aliases_and_errors():
+    assert tools.parse_weights(
+        {"points": 1, "Rebounds": 1.2, "double double": 2, "FG missed": -0.5, "blk": 0}
+    ) == {"pts": 1.0, "reb": 1.2, "dd": 2.0, "fgmi": -0.5}
+    assert tools.parse_weights('{"pts": 1}') == {"pts": 1.0}
+    with pytest.raises(ToolError, match="percentage"):
+        tools.parse_weights({"fg%": 1})
+    with pytest.raises(ToolError, match="Did you mean: pts"):
+        tools.parse_weights({"ptz": 1})
+    with pytest.raises(ToolError, match="must be a number"):
+        tools.parse_weights({"pts": "lots"})
+    with pytest.raises(ToolError, match="repeats"):
+        tools.parse_weights({"pts": 1, "points": 2})
+    with pytest.raises(ToolError, match="non-empty"):
+        tools.parse_weights({})
+
+
+def test_fantasy_points_inline(con):
+    r = tools.get_stat(con, ["pts"], player="Jokic", scoring=YAHOO)
+    assert r["stats"]["fpts"]["value"] == 59.4
+    assert r["scoring"] == {"weights": YAHOO}
+    totals = tools.get_stat(
+        con, "fpts", player="Jokic", scoring=YAHOO, per_mode="totals"
+    )
+    assert totals["stats"]["fpts"]["value"] == 178.2
+
+
+def test_double_and_triple_double_bonuses(con):
+    # g1 30/12/10 and g3 40/14/12 are triple-doubles; g2 20/10/8 is a double-double.
+    r = tools.get_stat(
+        con, "fpts", player="Jokic", scoring={"dd": 2, "td": 5}, per_mode="totals"
+    )
+    assert r["stats"]["fpts"]["value"] == 3 * 2 + 2 * 5
+
+
+def test_fpts_without_scoring_asks_for_it(con):
+    with pytest.raises(ToolError, match="save_fantasy_scoring"):
+        tools.get_stat(con, "fpts", player="Jokic")
+    with pytest.raises(ToolError, match="only to stat='fpts'"):
+        tools.get_leaders(con, "pts", scoring=YAHOO)
+
+
+def test_saved_profiles(db_file):
+    with db.connect(read_only=False, path=db_file) as w:
+        saved = tools.save_fantasy_scoring(w, {"points": 1, "rebounds": 1.2})
+        assert saved["saved"] == "default" and saved["weights"] == {
+            "pts": 1.0,
+            "reb": 1.2,
+        }
+        tools.save_fantasy_scoring(w, YAHOO, name="Yahoo League")
+    with db.connect(read_only=True, path=db_file) as r:
+        assert (
+            tools.get_stat(r, "fpts", player="Jokic")["scoring"]["profile"] == "default"
+        )
+        y = tools.get_stat(r, "fpts", player="Jokic", scoring="yahoo league")
+        assert y["stats"]["fpts"]["value"] == 59.4
+        assert set(tools.list_stats(r)["fantasy"]["saved_profiles"]) == {
+            "default",
+            "yahoo league",
+        }
+        with pytest.raises(ToolError, match="No fantasy scoring profile named 'espn'"):
+            tools.get_stat(r, "fpts", player="Jokic", scoring="espn")
+    with db.connect(read_only=False, path=db_file) as w:
+        tools.delete_fantasy_scoring(w, "default")
+    with db.connect(read_only=True, path=db_file) as r:
+        # The only profile left is used by default.
+        assert (
+            tools.get_stat(r, "fpts", player="Jokic")["scoring"]["profile"]
+            == "yahoo league"
+        )
+
+
+def test_database_without_scoring_table(db_file):
+    with db.connect(read_only=False, path=db_file) as w:
+        w.execute("DROP TABLE fantasy_scoring")
+    with db.connect(read_only=True, path=db_file) as r:
+        assert tools.list_stats(r)["fantasy"]["saved_profiles"] == {}
+        with pytest.raises(ToolError, match="No fantasy scoring is set up"):
+            tools.get_stat(r, "fpts", player="Jokic")
+
+
+def test_fantasy_leaders(con):
+    r = tools.get_leaders(con, "fpts", scoring=YAHOO, min_games=1)
+    assert r["leaders"][0]["player"]["name"] == "Nikola Jokić"
+    assert r["leaders"][0]["value"] == 59.4
+
+
+# --------------------------------------------------------------------------- game logs
+
+
+def test_game_log_default_and_sorted(con):
+    r = tools.get_game_log(con, player="Jokic")
+    assert r["games_matched"] == 3
+    assert [g["date"] for g in r["games"]] == ["2025-11-05", "2025-11-03", "2025-11-01"]
+    g = r["games"][0]
+    assert g["matchup"] == "@ BOS" and g["pts"] == 40 and g["min"] == 34.0
+    assert "fpts" not in g
+
+    best = tools.get_game_log(
+        con, player="Jokic", scoring=YAHOO, sort_by="fpts", limit=2
+    )
+    assert [(g["date"], g["fpts"]) for g in best["games"]] == [
+        ("2025-11-05", 74.8),
+        ("2025-11-01", 59.4),
+    ]
+    assert best["games_matched"] == 3 and best["games_shown"] == 2
+
+    pct = tools.get_game_log(
+        con, player="Jokic", stat="fg_pct", sort_by="fg_pct", order="asc"
+    )
+    assert pct["games"][0] == {
+        "date": "2025-11-03",
+        "team": "LAL",
+        "matchup": "@ GSW",
+        "wl": "W",
+        "fg_pct": 0.5,
+    }
+
+
+def test_weekly_best_n(con):
+    # 2025-11-01 is a Saturday (week of Oct 27); Nov 3 and Nov 5 share the next week.
+    r = tools.get_game_log(con, player="Jokic", scoring=YAHOO, best_n_per_week=1)
+    wk = r["weekly_best"]
+    assert [(w["week_of"], w["games"], w["best_fpts"]) for w in wk["by_week"]] == [
+        ("2025-10-27", 1, [59.4]),
+        ("2025-11-03", 2, [74.8]),
+    ]
+    assert wk["avg_weekly_total"] == 67.1
+    assert wk["weeks_with_fewer_than_n_games"] == 0
+
+    two = tools.get_game_log(con, player="Jokic", scoring=YAHOO, best_n_per_week=2)
+    assert two["weekly_best"]["avg_weekly_total"] == round((59.4 + 74.8 + 44.0) / 2, 1)
+    assert two["weekly_best"]["weeks_with_fewer_than_n_games"] == 1
+
+
+# --------------------------------------------------------------------------- teammate splits
+
+
+def test_teammate_splits(con):
+    out = tools.get_stat(con, "pts", player="Jokic", teammates_out="Reaves")
+    assert out["games_played"] == 2 and out["stats"]["pts"]["value"] == 25.0
+    assert out["teammates_out"] == ["Austin Reaves"]
+    in_ = tools.get_stat(con, "pts", player="Jokic", teammates_in=["Austin Reaves"])
+    assert in_["games_played"] == 1 and in_["stats"]["pts"]["value"] == 40.0
+
+    # Reaves never played for Boston, so Seth Curry has no "without Reaves" games.
+    assert (
+        tools.get_stat(con, "pts", player="Seth Curry", teammates_out="Reaves")[
+            "games_played"
+        ]
+        == 0
+    )
+    # Team-level split.
+    lal = tools.get_stat(con, "pts", team="LAL", teammates_out="Reaves")
+    assert lal["games_played"] == 2 and lal["stats"]["pts"]["value"] == 107.5
+
+    log = tools.get_game_log(con, player="Jokic", teammates_out="Reaves")
+    assert [g["date"] for g in log["games"]] == ["2025-11-03", "2025-11-01"]
+
+    with pytest.raises(ToolError, match="own teammate"):
+        tools.get_stat(con, "pts", player="Jokic", teammates_out="Jokic")
+
+
+def test_leaders_without_teammate(con):
+    r = tools.get_leaders(con, "fpts", scoring=YAHOO, teammates_out="Reaves")
+    # LAL played 2 games without Reaves -> min_games 1; Reaves himself is excluded.
+    assert r["qualification"]["min_games"] == 1
+    assert [(e["player"]["id"], e["value"]) for e in r["leaders"]] == [(1, 51.7)]
