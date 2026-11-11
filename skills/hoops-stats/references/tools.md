@@ -7,7 +7,9 @@ All tools return JSON objects. Errors come back as tool errors with a message th
 - [Common parameters](#common-parameters)
 - [list_stats](#list_stats)
 - [get_stat](#get_stat)
+- [get_game_log](#get_game_log)
 - [get_leaders](#get_leaders)
+- [save_fantasy_scoring / delete_fantasy_scoring](#save_fantasy_scoring--delete_fantasy_scoring)
 - [refresh_data](#refresh_data)
 - [How names are matched](#how-names-are-matched)
 - [Errors](#errors)
@@ -19,6 +21,11 @@ All tools return JSON objects. Errors come back as tool errors with a message th
 | `season` | `"2025-26"` (also `"2025-2026"`), or `"all"` | Most recent loaded season | `"all"` combines every loaded season into one aggregate; it does not return one row per season. For a per-season breakdown, make one call per season. |
 | `season_type` | `"Regular Season"`, `"Playoffs"` | `"Regular Season"` | Play-in games are not loaded. |
 | `per_mode` | `"per_game"`, `"totals"`, `"per_36"` | `"per_game"` | Applies to counting stats only; percentages ignore it. `per_36` is players only. See [stats.md](stats.md#per-modes). |
+| `scoring` | Saved profile name (`"yahoo league"`), or inline weights `{"pts": 1, "reb": 1.2, ...}` | The saved `default` profile (or the only saved profile) | Used by `fpts`. Passing it to `get_stat` / `get_game_log` adds `fpts` to the stats. See [stats.md](stats.md#fantasy-points). |
+| `teammates_out` | Player name, id, or list | None | Only games where every listed player has **no** box-score row for the same team. Counts only seasons in which they played for that team at least once. |
+| `teammates_in` | Player name, id, or list | None | Only games where every listed player **has** a row for the same team. `get_stat` and `get_game_log` only. |
+
+The output echoes `scoring` (`{"profile", "weights"}`), `teammates_out` and `teammates_in` when they were used. A teammate filter also adds a `teammate_note` explaining what "out" means.
 
 ## list_stats
 
@@ -75,6 +82,43 @@ Returns (player):
 
 `team_filter`, `opponent` and `last_n_games` appear only when those filters were used. For a team, `"team": {"id", "abbreviation", "name"}` replaces `player`. `season` is a list when `season="all"` spans several seasons. If no games match, `games_played` is 0, `stats` is `{}`, and a `note` says so; there's no `date_range`.
 
+Also takes `teammates_out`, `teammates_in` and `scoring` (see [Common parameters](#common-parameters)).
+
+## get_game_log
+
+One row per game for a player or team.
+
+| Parameter | Default | Notes |
+| --- | --- | --- |
+| `player` / `team` | | As in `get_stat`; one is required. |
+| `stat` | `min, pts, reb, ast, stl, blk, tov, fg3m, fgm, fga, ftm, fta` | Any stats, including percentages (per game) and `fpts`. |
+| `season`, `season_type`, `opponent`, `last_n_games`, `teammates_out`, `teammates_in`, `scoring` | | As in `get_stat`. |
+| `sort_by` | `"date"` | Or a stat: `"fpts"` ranks best fantasy games. The stat is added to the rows. Games with no value (a percentage on 0 attempts) sort last. |
+| `order` | `"desc"` | Newest or highest first; `"asc"` for oldest or lowest. |
+| `limit` | 25 | 1–100 rows shown. Sorting and `best_n_per_week` use every matched game, not just the rows shown. |
+| `best_n_per_week` | None | Adds `weekly_best`: each Monday–Sunday week's top N `fpts` games. Needs scoring. |
+
+Returns:
+
+```json
+{
+  "player": {"id": 1642347, "name": "Jamal Shead"},
+  "season": "2026-27", "season_type": "Regular Season",
+  "games_matched": 10, "games_shown": 3, "sorted_by": "fpts desc",
+  "scoring": {"profile": "default", "weights": {"pts": 0.5, "reb": 1.5}},
+  "date_range": {"first": "2026-10-21", "last": "2026-11-10"},
+  "weekly_best": {
+    "n": 3, "week_definition": "Monday-Sunday", "weeks": 4,
+    "avg_weekly_total": 56.9, "avg_counted_game": 22.8, "weeks_with_fewer_than_n_games": 1,
+    "by_week": [{"week_of": "2026-10-20", "games": 3, "best_fpts": [30.0, 22.5, 18.0], "total": 70.5}]
+  },
+  "games": [{"date": "2026-11-04", "team": "TOR", "matchup": "@ BOS", "wl": "L",
+             "min": 24.0, "pts": 13, "reb": 9, "fpts": 32.0}]
+}
+```
+
+Counting stats are whole numbers per game; `min` and `fpts` have 1 decimal. `matchup` is `"vs XXX"` at home, `"@ XXX"` away. If no games match, `games` is `[]` with a `note`.
+
 ## get_leaders
 
 | Parameter | Default | Notes |
@@ -86,6 +130,8 @@ Returns (player):
 | `limit` | 10 | 1–50. |
 | `min_games` | Computed | Overrides the games-played minimum. `min_games=1` effectively disables it. See [stats.md](stats.md#leaderboard-qualification). |
 | `order` | `"desc"` | `"asc"` for lowest first (fewest turnovers, worst FT%). |
+| `teammates_out` | None | Players only: rank those players' teammates over just the games they missed ("who benefits when X sits"). The games minimum scales to those games. |
+| `scoring` | Saved default | Only with `stat="fpts"`. |
 
 Returns:
 
@@ -107,6 +153,14 @@ Returns:
 - For `entity="team"`, entries are `{"rank", "team": "LAL", "games_played", "value"}`, and teams have no qualification minimums.
 - Ties share a rank (1, 1, 3).
 - `qualified_count` is how many players or teams met the minimums and had a value, before `limit` was applied.
+
+## save_fantasy_scoring / delete_fantasy_scoring
+
+`save_fantasy_scoring(weights, name="default")` stores a league's scoring in the local database, replacing any profile with the same name. Names are case-insensitive. Weight keys are any counting stat or alias, `fgmi` / `fg3mi` / `ftmi`, `dd` and `td` (see [stats.md](stats.md#fantasy-points)); zero weights are dropped. Returns `{"saved", "weights", "labels", "profiles"}`. Echo `labels` back to the user so they can confirm the parse.
+
+`delete_fantasy_scoring(name)` removes one profile. Returns `{"deleted", "profiles"}`.
+
+`list_stats` lists saved profiles under `fantasy.saved_profiles`, next to `fantasy.scoring_terms`.
 
 ## refresh_data
 
@@ -163,3 +217,8 @@ The name returned is the most recent name in the data.
 | `The team filter narrows a player leaderboard` | Drop `team` when `entity="team"`. |
 | `Couldn't download from stats.nba.com` | Usually a VPN: ask the user to turn it off and retry. Otherwise the site may be down; retry later. Any seasons listed as already saved are kept. |
 | `hasn't started` | A future season was requested. |
+| `No fantasy scoring is set up` | Ask the user for their league's points per stat, call `save_fantasy_scoring`, retry. |
+| `No fantasy scoring profile named` / `Several scoring profiles are saved` | Use a listed profile name, or save one as `default`. |
+| `Unknown scoring stat` / `is a percentage` | Fix the weight key; percentages can't be weighted, use makes and misses. |
+| `scoring applies only to stat='fpts'` | Drop `scoring`, or rank `fpts`. |
+| `can't be their own teammate filter` | Remove the subject player from `teammates_out` / `teammates_in`. |

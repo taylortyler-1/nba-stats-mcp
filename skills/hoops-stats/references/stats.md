@@ -42,6 +42,29 @@ Computed from summed components. They return a **fraction from 0 to 1** and igno
 
 A rate stat is `null` when its denominator is zero, for example 3P% for a player with no attempts.
 
+## Fantasy points
+
+`fpts` (aliases: fantasy points, fantasy, fp) is a counting stat computed from **scoring weights**: each game's fantasy points are Σ weight × stat for that game, and those per-game values are then summed and expressed by `per_mode` like any other counting stat. Totals round to 1 decimal.
+
+Weights come from the `scoring` parameter (a saved profile name, or inline weights), or by default from the saved `default` profile. If only one profile is saved, it's the default. Weight keys can be:
+
+| Key | Meaning |
+| --- | --- |
+| Any counting stat | `pts`, `reb`, `oreb`, `dreb`, `ast`, `stl`, `blk`, `tov`, `pf`, `min`, `plus_minus`, `fgm`, `fga`, `fg3m`, `fg3a`, `ftm`, `fta`, or their aliases |
+| `fgmi`, `fg3mi`, `ftmi` | Missed field goals, threes, free throws (attempts − makes) |
+| `dd`, `td` | 1 for a double-double / triple-double game (10+ in two / three of pts, reb, ast, stl, blk) |
+
+Percentages can't be weighted. A triple-double game also counts as a double-double, so the bonuses stack. If a league pays a triple-double bonus *instead of* the double-double bonus, set `td` to the triple-double bonus minus the double-double bonus.
+
+Common presets, for reference only. Always confirm the user's actual league settings:
+
+| League default | Weights |
+| --- | --- |
+| Yahoo points | `{"pts": 1, "reb": 1.2, "ast": 1.5, "stl": 3, "blk": 3, "tov": -1}` |
+| ESPN points | `{"pts": 1, "fg3m": 1, "fga": -1, "fgm": 2, "fta": -1, "ftm": 1, "reb": 1, "ast": 2, "stl": 4, "blk": 4, "tov": -2}` |
+
+**Best N per week** (`get_game_log(best_n_per_week=N)`): games are grouped into Monday–Sunday weeks; each week's total is the sum of its N highest `fpts` games (fewer if the player played fewer than N). `avg_weekly_total` averages those totals over weeks with at least one game, and `avg_counted_game` averages the counted games.
+
 ## Per modes
 
 | Mode | Counting stat value | Rounding |
@@ -60,7 +83,7 @@ Rate stats are rounded to 3 decimals in every mode.
 
 | Minimum | When it applies | Default |
 | --- | --- | --- |
-| `min_games` | Rate stats, and counting stats in `per_game` or `per_36` mode. Not applied to `totals` of counting stats. | 50% of the most games any team has played in the scope (25% in the playoffs), rounded up. The scope is the season(s), plus the `team` filter if one is set. |
+| `min_games` | Rate stats, and counting stats in `per_game` or `per_36` mode. Not applied to `totals` of counting stats. | 50% of the most games any team has played in the scope (25% in the playoffs), rounded up. The scope is the season(s), plus the `team` filter if one is set, plus `teammates_out` (so it's based on the games those players missed). |
 | `min_<volume>_per_game` | Rate stats | The volume minimum in the [rate stats table](#rate-stats), measured as total attempts ≥ minimum × games played. |
 | `min_minutes_per_game` | Counting stats in `per_36` mode | 15 minutes per game. |
 
@@ -76,7 +99,7 @@ Passing `min_games` replaces the computed games minimum; the volume and minutes 
 
 These aren't in the data, and the server can't compute them:
 - Advanced metrics: PER, BPM, VORP, win shares, usage rate, net/offensive/defensive rating, pace.
-- Tracking and shot-location data, play-by-play, on/off splits, lineups.
+- Tracking and shot-location data, play-by-play, lineups, and true on/off splits (minutes with and without a teammate on the court). Game-level teammate splits *are* available: `teammates_out` / `teammates_in` filter to games a teammate missed or played.
 - Standings, schedules, rosters, awards, contracts, injuries.
 
 Simple combinations can be derived from the counting stats, for example points + rebounds + assists or assist-to-turnover ratio. Fetch the components with `get_stat`, using `totals` for ratios, and do the arithmetic yourself. Say that you did.

@@ -40,9 +40,11 @@ Ask your agent a question. On first use the database is empty; the agent calls `
 
 | Tool | What it does |
 | --- | --- |
-| `get_stat` | One player's or team's stats, with filters for season, playoffs, last N games, opponent, and per-game / totals / per-36 |
-| `get_leaders` | Rank players or teams by a stat, with qualification minimums for fair leaderboards |
-| `list_stats` | Available stats, loaded seasons, and the date of the most recent game |
+| `get_stat` | One player's or team's stats, with filters for season, playoffs, last N games, opponent, teammates in/out, and per-game / totals / per-36 |
+| `get_game_log` | One row per game, sortable by any stat, with an optional best-N-fantasy-games-per-week summary |
+| `get_leaders` | Rank players or teams by a stat (including `fpts`), with qualification minimums for fair leaderboards |
+| `save_fantasy_scoring` / `delete_fantasy_scoring` | Store fantasy scoring weights in the local database |
+| `list_stats` | Available stats, saved scoring profiles, loaded seasons, and the date of the most recent game |
 | `refresh_data` | Download the latest games from stats.nba.com |
 
 For agents, the [hoops-stats skill](../skills/hoops-stats/SKILL.md) covers how to use the tools well and documents the data and schema.

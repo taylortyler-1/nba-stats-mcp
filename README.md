@@ -2,16 +2,20 @@
 
 Ask Claude about NBA player and team stats and get answers computed from real box scores: "What's Jokić averaging this season?", "Who leads the league in 3P%?", "How has Cooper Flagg played in his last 10 games?", "Mavericks points per game in the playoffs".
 
-The plugin adds an MCP server with four tools and a skill that teaches Claude how to use them:
+It also handles fantasy questions: "How many fantasy points does Shead score when Quickley sits?", "Rollins' best 3 games per week".
+
+The plugin adds an MCP server with these tools and a skill that teaches Claude how to use them:
 
 | Tool | What it does |
 | --- | --- |
-| `get_stat` | One player's or team's stats, filtered by season, playoffs, last N games, or opponent, as per-game, totals, or per-36 |
-| `get_leaders` | Rank players or teams by a stat, with minimums so small samples don't top the list |
-| `list_stats` | Available stats, loaded seasons, and the date of the most recent game |
+| `get_stat` | One player's or team's stats, filtered by season, playoffs, last N games, opponent, or which teammates played, as per-game, totals, or per-36 |
+| `get_game_log` | Game-by-game lines, best games by any stat, and best-N-games-per-week summaries |
+| `get_leaders` | Rank players or teams by a stat, including fantasy points, with minimums so small samples don't top the list |
+| `save_fantasy_scoring` / `delete_fantasy_scoring` | Save your league's points per stat so `fpts` (fantasy points) works in every tool |
+| `list_stats` | Available stats, saved scoring, loaded seasons, and the date of the most recent game |
 | `refresh_data` | Download the latest games from stats.nba.com |
 
-It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers, minutes, plus/minus, and shooting, including TS% and eFG%. It doesn't cover advanced metrics, play-by-play, standings, or rosters.
+It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers, minutes, plus/minus, and shooting, including TS% and eFG%, plus fantasy points under your league's scoring. It doesn't cover advanced metrics, play-by-play, standings, or rosters.
 
 ## Requirements
 

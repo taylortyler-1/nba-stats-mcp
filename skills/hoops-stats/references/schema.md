@@ -62,6 +62,10 @@ Current franchises: one row each. Primary key: `team_id`.
 
 One row per `(entity, season, season_type)` that has been downloaded. Columns: `entity` (`'player'` or `'team'`), `season`, `season_type`, `row_count`, `loaded_at` (timestamp of the last download).
 
+### `fantasy_scoring`
+
+Saved fantasy scoring profiles, written by `save_fantasy_scoring`. `refresh_data` doesn't touch it. Columns: `name` (primary key, lowercase), `weights` (JSON object of scoring term → points, e.g. `{"pts": 1.0, "reb": 1.2, "tov": -1.0}`), `updated_at`. Databases created before this table existed get it on the next write.
+
 ## Coverage
 
 - **Loaded seasons** (`list_stats` → `data.seasons`) are the seasons and season types whose player download returned at least one row. A season type that was downloaded but had no games, such as Playoffs before April, isn't listed.
@@ -71,7 +75,7 @@ One row per `(entity, season, season_type)` that has been downloaded. Columns: `
 ## Caveats
 
 - **Traded players** have rows under each team they played for. Season totals combine all teams. `get_stat(player=..., team=...)` isolates one stint, and leaderboards show `"DAL/LAL"`.
-- **Missed games have no rows.** Games played counts only games the player appeared in. Nothing in the data tells injuries apart from coach's decisions.
+- **Missed games have no rows.** Games played counts only games the player appeared in. Nothing in the data tells injuries apart from coach's decisions. The `teammates_out` filter relies on this: a teammate with no row for a game counts as out.
 - **Play-in games aren't loaded.** stats.nba.com treats them as a separate season type. Preseason and the All-Star Game aren't loaded either.
 - **Abbreviations are as recorded each season.** The `opponent` filter compares the current abbreviation with `opponent_abbreviation`, so in seasons before a franchise changed its abbreviation, its games won't match. Examples: `NJN`→`BKN` in 2012, `NOH`→`NOP` in 2013. `team_id` is stable, so the `team` filter is unaffected.
 - **Minutes** are stored as decimal minutes, so `34.5` means 34:30.
