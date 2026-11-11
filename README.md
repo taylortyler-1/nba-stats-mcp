@@ -8,14 +8,14 @@ The plugin adds an MCP server with these tools and a skill that teaches Claude h
 
 | Tool | What it does |
 | --- | --- |
-| `get_stat` | One player's or team's stats, filtered by season, playoffs, last N games, opponent, or which teammates played, as per-game, totals, or per-36 |
+| `get_stat` | One player's or team's stats, filtered by season, playoffs, last N games, opponent, or which teammates played, as per-game, totals, per-36, or per-100 possessions |
 | `get_game_log` | Game-by-game lines, best games by any stat, and best-N-games-per-week summaries |
 | `get_leaders` | Rank players or teams by a stat, including fantasy points, optionally by position, with minimums so small samples don't top the list |
 | `save_fantasy_scoring` / `delete_fantasy_scoring` | Save your league's points per stat so `fpts` (fantasy points) works in every tool |
 | `list_stats` | Available stats, saved scoring, loaded seasons, and the date of the most recent game |
 | `refresh_data` | Download the latest games from stats.nba.com |
 
-It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers, minutes, plus/minus, and shooting, including TS% and eFG%, plus fantasy points under your league's scoring. It doesn't cover advanced metrics, play-by-play, standings, or rosters.
+It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers, minutes, plus/minus, and shooting, including TS% and eFG%, stocks (steals + blocks), assist-to-turnover ratio, plus fantasy points under your league's scoring. It doesn't cover advanced metrics, play-by-play, standings, or rosters.
 
 ## Requirements
 

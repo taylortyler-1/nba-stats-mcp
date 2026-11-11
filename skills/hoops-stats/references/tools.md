@@ -20,7 +20,7 @@ All tools return JSON objects. Errors come back as tool errors with a message th
 | --- | --- | --- | --- |
 | `season` | `"2025-26"` (also `"2025-2026"`), or `"all"` | Most recent loaded season | `"all"` combines every loaded season into one aggregate; it does not return one row per season. For a per-season breakdown, make one call per season. |
 | `season_type` | `"Regular Season"`, `"Playoffs"` | `"Regular Season"` | Play-in games are not loaded. |
-| `per_mode` | `"per_game"`, `"totals"`, `"per_36"` | `"per_game"` | Applies to counting stats only; percentages ignore it. `per_36` is players only. See [stats.md](stats.md#per-modes). |
+| `per_mode` | `"per_game"`, `"totals"`, `"per_36"`, `"per_100"` | `"per_game"` | Applies to counting stats only; percentages and `ast_to` ignore it. `per_36` is players only. `per_100` is per 100 possessions (for a player, possessions while on court). See [stats.md](stats.md#per-modes). |
 | `scoring` | Saved profile name (`"yahoo league"`), or inline weights `{"pts": 1, "reb": 1.2, ...}` | The saved `default` profile (or the only saved profile) | Used by `fpts`. Passing it to `get_stat` / `get_game_log` adds `fpts` to the stats. See [stats.md](stats.md#fantasy-points). |
 | `teammates_out` | Player name, id, or list | None | Only games where every listed player has **no** box-score row for the same team. Counts only seasons in which they played for that team at least once. |
 | `teammates_in` | Player name, id, or list | None | Only games where every listed player **has** a row for the same team. `get_stat` and `get_game_log` only. |
@@ -39,7 +39,7 @@ Returns:
 {
   "stats": [{"name": "pts", "label": "Points", "description": "...", "category": "box score",
              "type": "counting", "aliases": ["points", "scoring"]}],
-  "per_modes": {"totals": "...", "per_game": "...", "per_36": "..."},
+  "per_modes": {"totals": "...", "per_game": "...", "per_36": "...", "per_100": "..."},
   "notes": "...",
   "data": {"seasons": {"Regular Season": ["2024-25", "2025-26"], "Playoffs": ["2024-25"]},
            "data_through": "2025-11-03"}
@@ -216,7 +216,7 @@ The name returned is the most recent name in the data.
 | `matches several players` / `No exact match ... Closest` | Retry with the full name or the listed id. |
 | `matches several teams` | Use the abbreviation. |
 | `No player matching` | Check the spelling, or the player has no games in loaded seasons. Load the right season. |
-| `per_36 applies to players only` | Use `per_game` or `totals` for teams. |
+| `per_36 applies to players only` | Use `per_game`, `per_100` or `totals` for teams. |
 | `ranks one stat at a time` | Make one `get_leaders` call per stat. |
 | `The team filter narrows a player leaderboard` | Drop `team` when `entity="team"`. |
 | `Couldn't download from stats.nba.com` | Usually a VPN: ask the user to turn it off and retry. Otherwise the site may be down; retry later. Any seasons listed as already saved are kept. |

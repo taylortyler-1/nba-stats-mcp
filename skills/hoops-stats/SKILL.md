@@ -1,6 +1,6 @@
 ---
 name: hoops-stats
-description: Answer NBA statistics and fantasy basketball questions with the hoops-stats MCP server — player and team box-score stats, game logs, leaderboards, shooting percentages, per-game/per-36 numbers, splits by opponent, recent games, or whether a teammate played, and fantasy points under the user's league scoring. Use when the user asks about NBA players, teams, stats, or fantasy basketball and the hoops-stats tools (get_stat, get_game_log, get_leaders, list_stats, refresh_data) are available.
+description: Answer NBA statistics and fantasy basketball questions with the hoops-stats MCP server — player and team box-score stats, game logs, leaderboards, shooting percentages, per-game/per-36/per-100-possession numbers, splits by opponent, recent games, or whether a teammate played, and fantasy points under the user's league scoring. Use when the user asks about NBA players, teams, stats, or fantasy basketball and the hoops-stats tools (get_stat, get_game_log, get_leaders, list_stats, refresh_data) are available.
 ---
 
 # NBA stats
@@ -42,7 +42,7 @@ If these tools aren't available, the server isn't running. It's a local server, 
 - **Box score only.** No advanced stats (PER, BPM, usage, minute-level on/off, win shares), shot locations, play-by-play, standings, schedules, rosters, contracts, or injuries. Say so rather than estimating. Teammate filters are game-level: "out" means no box-score row, which can't tell injury from rest or not yet being on the team.
 - **Only loaded seasons are searchable** — a player who hasn't played in a loaded season won't be found. Load the season with `refresh_data(seasons=[...])`.
 - **Leaderboards apply qualification minimums**, so a 2-game hot streak doesn't top the list. The result's `qualification` shows the thresholds; pass `min_games` to change them.
-- `per_36` is for players only; `last_n_games` counts the most recent games after other filters.
+- `per_36` is for players only; `per_100` (per 100 possessions) works for players and teams, with possessions estimated from the box score (see references/stats.md). `stocks` (steals + blocks) and `ast_to` (assist-to-turnover ratio) are built-in stats; don't compute them by hand. `last_n_games` counts the most recent games after other filters.
 
 ## References
 
