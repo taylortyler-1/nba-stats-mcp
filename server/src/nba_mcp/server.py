@@ -72,7 +72,7 @@ DOWNLOAD_FAILED = (
 )
 
 MAX_REFRESH_SEASONS = 5
-REFRESH_PAUSE = 1.0  # seconds between stats.nba.com requests, to be polite
+REFRESH_PAUSE = ingest.REQUEST_PAUSE
 
 _refresh_lock = anyio.Lock()
 

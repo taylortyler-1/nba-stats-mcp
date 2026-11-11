@@ -74,6 +74,34 @@ def transform_game_log(
     return out
 
 
+@contextmanager
+def _transaction(con: duckdb.DuckDBPyConnection) -> Generator[None]:
+    """Commit the block's statements together, or roll them all back on an error."""
+    con.execute("BEGIN")
+    try:
+        yield
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+
+
+def _insert_df(
+    con: duckdb.DuckDBPyConnection,
+    table: str,
+    df: pd.DataFrame,
+    *,
+    replace: bool = False,
+) -> None:
+    """Insert a DataFrame's rows into `table`, matching columns by name."""
+    if df.empty:
+        return
+    verb = "INSERT OR REPLACE" if replace else "INSERT"
+    con.register("incoming", df)
+    con.execute(f"{verb} INTO {table} BY NAME SELECT * FROM incoming")
+    con.unregister("incoming")
+
+
 def replace_games(
     con: duckdb.DuckDBPyConnection,
     entity: Entity,
@@ -83,25 +111,17 @@ def replace_games(
 ) -> int:
     """Replace one season/season-type slice of a games table with `df`."""
     table = db.GAMES_TABLE[entity]
-    con.execute("BEGIN")
-    try:
+    with _transaction(con):
         con.execute(
             f"DELETE FROM {table} WHERE season = ? AND season_type = ?",
             [season, season_type],
         )
-        if not df.empty:
-            con.register("incoming", df)
-            con.execute(f"INSERT INTO {table} BY NAME SELECT * FROM incoming")
-            con.unregister("incoming")
+        _insert_df(con, table, df)
         con.execute(
             "INSERT OR REPLACE INTO ingest_log (entity, season, season_type, row_count, loaded_at) "
             "VALUES (?, ?, ?, ?, current_timestamp)",
             [entity, season, season_type, len(df)],
         )
-        con.execute("COMMIT")
-    except Exception:
-        con.execute("ROLLBACK")
-        raise
     return len(df)
 
 
@@ -111,10 +131,7 @@ def load_teams(con: duckdb.DuckDBPyConnection) -> None:
     df = pd.DataFrame(teams.get_teams())[
         ["id", "abbreviation", "full_name", "nickname", "city"]
     ]
-    df = df.rename(columns={"id": "team_id"})
-    con.register("incoming_teams", df)
-    con.execute("INSERT OR REPLACE INTO teams BY NAME SELECT * FROM incoming_teams")
-    con.unregister("incoming_teams")
+    _insert_df(con, "teams", df.rename(columns={"id": "team_id"}), replace=True)
 
 
 def transform_player_index(raw: pd.DataFrame) -> pd.DataFrame:
@@ -138,17 +155,9 @@ def transform_player_index(raw: pd.DataFrame) -> pd.DataFrame:
 
 def replace_players(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
     """Replace the players table with `df`."""
-    con.execute("BEGIN")
-    try:
+    with _transaction(con):
         con.execute("DELETE FROM players")
-        if not df.empty:
-            con.register("incoming_players", df)
-            con.execute("INSERT INTO players BY NAME SELECT * FROM incoming_players")
-            con.unregister("incoming_players")
-        con.execute("COMMIT")
-    except Exception:
-        con.execute("ROLLBACK")
-        raise
+        _insert_df(con, "players", df)
     return len(df)
 
 
@@ -156,6 +165,7 @@ def replace_players(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
 # than refusing, requests it blocks (VPNs, cloud servers), so keep the wait short: a
 # blocked request fails in ~35s, inside the ~60-80s limit some clients put on a tool call.
 REQUEST_TIMEOUT = 15
+REQUEST_PAUSE = 1.0  # seconds between stats.nba.com requests, to be polite
 
 
 def fetch_game_log(
@@ -248,14 +258,16 @@ def plan(seasons: list[str], season_types: list[str]) -> list[tuple[Entity, str,
     return [(e, s, st) for s in seasons for st in season_types for e in entities]
 
 
-def ingest(seasons: list[str], season_types: list[str], pause: float = 1.0) -> None:
+def ingest(
+    seasons: list[str], season_types: list[str], pause: float = REQUEST_PAUSE
+) -> None:
     store_teams()
     for entity, season, season_type in plan(seasons, season_types):
         n = store_slice(
             entity, season, season_type, fetch_slice(entity, season, season_type)
         )
         log.info("%s %s %s: %d rows", season, season_type, entity, n)
-        time.sleep(pause)  # be polite to stats.nba.com
+        time.sleep(pause)
     log.info("player positions: %d players", store_players(fetch_players()))
 
 
