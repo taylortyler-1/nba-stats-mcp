@@ -1,10 +1,10 @@
 # Hoops Stats
 
-Ask Claude about NBA player and team stats and get answers computed from real box scores: "What's Jokić averaging this season?", "Who leads the league in 3P%?", "How has Cooper Flagg played in his last 10 games?", "Mavericks points per game in the playoffs".
+Ask Claude or ChatGPT about NBA player and team stats and get answers computed from real box scores: "What's Jokić averaging this season?", "Who leads the league in 3P%?", "How has Cooper Flagg played in his last 10 games?", "Mavericks points per game in the playoffs".
 
 It also handles fantasy questions: "How many fantasy points does Shead score when Quickley sits?", "Rollins' best 3 games per week".
 
-The plugin adds an MCP server with these tools and a skill that teaches Claude how to use them:
+The plugin adds an MCP server with these tools and a skill that teaches the assistant how to use them:
 
 | Tool | What it does |
 | --- | --- |
@@ -19,7 +19,7 @@ It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers,
 
 ## Requirements
 
-- **Where it works:** Claude Code, and Cowork sessions on your own computer. The server runs locally, so regular chat on claude.ai doesn't start it.
+- **Where it works:** Claude Code, Cowork sessions on your own computer, and local-execution threads in ChatGPT desktop's Work mode or Codex (where available on your account). The server runs locally; ordinary cloud chats on claude.ai or ChatGPT don't start it.
 - **uv:** the plugin needs [uv](https://docs.astral.sh/uv/getting-started/installation/) installed. On macOS or Linux, run `curl -LsSf https://astral.sh/uv/install.sh | sh`. On Windows, run `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`. uv installs the right Python version for you.
 - **No VPN while downloading:** stats.nba.com blocks most VPNs and cloud servers. Turn your VPN off when the plugin downloads data. Asking questions about data already downloaded works with or without a VPN.
 
@@ -35,9 +35,31 @@ The first start takes a minute or so while uv downloads Python and the server's 
 /plugin install hoops-stats --marketplace taylortyler-1/nba-stats-mcp
 ```
 
+### ChatGPT desktop (local installation)
+
+This uses a local MCP server, not a hosted service or a public-directory submission. You need `uv` and a recent [Codex CLI](https://developers.openai.com/codex/cli) with plugin marketplace support.
+
+Once these packaging files are committed and pushed to GitHub, register the marketplace:
+
+```bash
+codex plugin marketplace add taylortyler-1/nba-stats-mcp
+```
+
+To try an unpushed checkout instead, run this from the repository root:
+
+```bash
+codex plugin marketplace add .
+```
+
+Restart ChatGPT desktop, open the **Plugins Directory**, select the **Hoops Stats** marketplace, and install **Hoops Stats**. Enable it in a local Work/Codex thread; you can mention it with `@`. This requires the corresponding desktop features on your account; it doesn't add tools to ordinary cloud conversations.
+
+The server runs on your computer and uses the same local database as the Claude plugin. No tunnel, hosted endpoint, or OpenAI API key is needed. To refresh a GitHub marketplace after updates, run `codex plugin marketplace upgrade hoops-stats`, then restart the app and check the installed plugin.
+
+See OpenAI's [local and GitHub marketplace instructions](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
+
 ## Use it
 
-Just ask a question. The first time, there's no data yet, so Claude calls `refresh_data` to download the current season, which takes a few seconds, and then answers. You can also ask Claude to:
+Just ask a question. The first time, there's no data yet, so the assistant calls `refresh_data` to download the current season, which takes a few seconds, and then answers. You can also ask it to:
 
 - "Refresh the NBA data" to pick up the latest games.
 - "Load the 2023-24 season" to add an older season. Each season only needs loading once.
@@ -72,5 +94,6 @@ This plugin isn't affiliated with or endorsed by the NBA. Data comes from the NB
 
 - **`server/`:** the MCP server. Its [README](server/README.md) covers development and using the server without the plugin.
 - **`skills/hoops-stats/`:** the skill, with reference docs on the tools, stats, and data.
-- **`.claude-plugin/`:** the plugin and marketplace manifests.
-- **`.mcp.json`:** how the plugin starts the server.
+- **`.claude-plugin/` and `.mcp.json`:** Claude plugin metadata, marketplace, and local server launch configuration.
+- **`plugin.json` and `mcp.json`:** portable plugin metadata and local server launch configuration for ChatGPT desktop/Codex.
+- **`.agents/plugins/marketplace.json`:** ChatGPT desktop/Codex marketplace catalog. Keep the portable and Claude manifests' versions and shared metadata in sync when releasing.
