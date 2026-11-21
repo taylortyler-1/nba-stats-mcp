@@ -25,9 +25,11 @@ def coverage(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     for season_type, season in rows:
         seasons.setdefault(season_type, []).append(season)
     through = scalar(con, "SELECT MAX(game_date) FROM player_games")
+    refreshed_at = scalar(con, "SELECT MAX(loaded_at) FROM ingest_log")
     return {
         "seasons": seasons,
         "data_through": through.isoformat() if through else None,
+        "last_refreshed_at": refreshed_at.isoformat() if refreshed_at else None,
     }
 
 

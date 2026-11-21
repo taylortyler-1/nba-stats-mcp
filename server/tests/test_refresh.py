@@ -105,6 +105,7 @@ def test_refresh_loads_current_season_then_queries_work(fake_nba):
     }
     assert out["refreshed"]["2025-26"]["Playoffs"] == {"team_rows": 0, "player_rows": 0}
     assert out["data"]["data_through"] == "2025-11-03"
+    assert out["data"]["last_refreshed_at"] is not None
     assert out["positions"] == {"players": len(PLAYER_INDEX)}
     assert len(fake_nba) == 5 and fake_nba[-1] == ("players",)
     assert progress[-1][:2] == (5, 5)
