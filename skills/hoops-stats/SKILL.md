@@ -23,7 +23,7 @@ If these tools aren't available, explain that the plugin needs to be enabled in 
 
 ## Workflow
 
-1. **Check freshness when it matters.** If the question is about recent games ("last night", "this week", "last 5 games"), call `list_stats` and compare `data_through` with today. If it's stale or nothing is loaded, call `refresh_data` (no arguments refreshes the current season).
+1. **Check freshness when it matters.** If the question is about recent games ("last night", "this week", "last 5 games"), call `list_stats`. `data_through` is the latest game date, while `last_refreshed_at` is when the source was last checked. Do not refresh merely because `data_through` is before today; that is normal on off-days and before tonight's games. Refresh only when nothing is loaded or the last check is old enough that newer completed games may exist. `refresh_data` skips a current season checked within 6 hours and completed older seasons. Use `force=true` only when the user explicitly asks to refresh again.
 2. **Pick the tool.** A named player or team → `get_stat`. "Who leads / best / worst / top N" → `get_leaders`.
 3. **Read errors — they're instructions.** An ambiguous name lists candidates with ids; retry with the full name or id. An unknown stat suggests the closest names. A missing season says which seasons are loaded and how to load it. "Being updated" means retry in a few seconds.
 4. **Report the context the result gives you**: season, games played, date range, and any qualification thresholds for leaderboards.

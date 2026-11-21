@@ -46,7 +46,7 @@ Returns:
 }
 ```
 
-`data` is a string explaining how to load data when the database doesn't exist yet. `data_through` is the date of the latest player game in any loaded season.
+`data` is a string explaining how to load data when the database doesn't exist yet. `data_through` is the date of the latest player game in any loaded season. `last_refreshed_at` is when stats.nba.com was most recently checked; unlike `data_through`, it advances even when no games were played.
 
 ## get_stat
 
@@ -189,7 +189,7 @@ Returns:
 
 Zero playoff rows is normal before the playoffs start. Only one refresh runs at a time.
 
-**When to call it:** nothing is loaded; the question is about games after `data_through`; or the user wants a season that isn't loaded. Older seasons don't change, so reloading them is wasted time.
+**When to call it:** nothing is loaded; `last_refreshed_at` is old enough that completed games may be missing; or the user wants a season that isn't loaded. Do not refresh only because `data_through` is before today—off-days and pregame hours make that normal. By default, the tool skips a current season checked within 6 hours and completed older seasons. Pass `force=true` only when the user explicitly asks to refresh again.
 
 ## How names are matched
 
