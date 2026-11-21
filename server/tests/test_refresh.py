@@ -119,6 +119,29 @@ def test_refresh_loads_current_season_then_queries_work(fake_nba):
     assert r.structured_content["leaders"][0]["position"] == "C"
 
 
+def test_refresh_skips_recent_current_season(fake_nba):
+    assert not call("refresh_data").is_error
+    fake_nba.clear()
+
+    r = call("refresh_data")
+
+    assert not r.is_error, text(r)
+    assert r.structured_content["refreshed"] == {}
+    assert "within the last 6 hours" in r.structured_content["skipped"]["2025-26"]
+    assert fake_nba == []
+
+
+def test_force_refresh_bypasses_cooldown(fake_nba):
+    assert not call("refresh_data").is_error
+    fake_nba.clear()
+
+    r = call("refresh_data", {"force": True})
+
+    assert not r.is_error, text(r)
+    assert r.structured_content["refreshed"]["2025-26"]["Regular Season"]
+    assert len(fake_nba) == 5
+
+
 def test_position_download_failure_keeps_games(fake_nba, monkeypatch):
     def boom():
         raise ConnectionError("timed out")

@@ -74,6 +74,7 @@ DOWNLOAD_FAILED = (
 )
 
 MAX_REFRESH_SEASONS = 5
+REFRESH_COOLDOWN_HOURS = 6
 REFRESH_PAUSE = ingest.REQUEST_PAUSE
 
 _refresh_lock = anyio.Lock()
@@ -432,6 +433,38 @@ def _refresh_targets(seasons: list[str] | None) -> list[str]:
     return targets
 
 
+def _needed_refresh_targets(targets: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Avoid re-downloading immutable seasons or a recently checked current season."""
+    current = ingest.current_season()
+    needed: list[str] = []
+    skipped: dict[str, str] = {}
+    try:
+        with db.connect(read_only=True) as con:
+            for season in targets:
+                row = con.execute(
+                    "SELECT COUNT(*), "
+                    "MIN(loaded_at) >= current_timestamp - INTERVAL '6 hours' "
+                    "FROM ingest_log WHERE season = ?",
+                    [season],
+                ).fetchone()
+                complete, recent = row if row else (0, False)
+                if complete < len(db.SEASON_TYPES) * 2:
+                    needed.append(season)
+                elif season != current:
+                    skipped[season] = "already loaded; completed seasons do not change"
+                elif recent:
+                    skipped[season] = (
+                        f"checked within the last {REFRESH_COOLDOWN_HOURS} hours"
+                    )
+                else:
+                    needed.append(season)
+    except FileNotFoundError:
+        return targets, skipped
+    except db.DatabaseBusy:
+        raise ToolError(BUSY) from None
+    return needed, skipped
+
+
 @mcp.tool(annotations=REFRESH)
 async def refresh_data(
     ctx: Context,
@@ -442,12 +475,20 @@ async def refresh_data(
             "which is the only one that gets new games. Older seasons only need loading once."
         ),
     ] = None,
+    force: Annotated[
+        bool,
+        Field(
+            description="Bypass freshness checks. Use only when the user explicitly asks to "
+            "refresh again; default false."
+        ),
+    ] = False,
 ) -> dict[str, Any]:
     """Download the latest NBA box scores from stats.nba.com into the local database.
 
-    Call this when no data is loaded, when the user asks about games newer than list_stats'
-    data_through date, or to load an older season. Loads regular season and playoffs.
-    Usually takes a few seconds per season; other tools keep working meanwhile.
+    Call this when no data is loaded, when list_stats shows the data has not been checked
+    recently enough for the question, or to load an older season. A current season checked
+    in the last 6 hours and completed older seasons are skipped unless force=true. Loads
+    regular season and playoffs. Usually takes a few seconds per season.
     """
     if _refresh_lock.locked():
         raise ToolError(
@@ -455,6 +496,16 @@ async def refresh_data(
         )
     async with _refresh_lock:
         targets = _refresh_targets(seasons)
+        skipped: dict[str, str] = {}
+        if not force:
+            targets, skipped = _needed_refresh_targets(targets)
+        if not targets:
+            return {
+                "refreshed": {},
+                "skipped": skipped,
+                "elapsed_seconds": 0.0,
+                "data": _with_db(resolve.coverage),
+            }
         slices = ingest.plan(targets, list(db.SEASON_TYPES))
         steps = len(slices) + 1  # + player positions
         started = time.monotonic()
@@ -506,6 +557,7 @@ async def refresh_data(
 
     return {
         "refreshed": loaded,
+        "skipped": skipped,
         "positions": positions,
         "elapsed_seconds": round(time.monotonic() - started, 1),
         "data": _with_db(resolve.coverage),
