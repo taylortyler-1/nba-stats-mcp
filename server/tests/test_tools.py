@@ -594,3 +594,19 @@ def test_every_tool_declares_all_four_hints():
         declared = tool.annotations.model_dump(by_alias=True) if tool.annotations else {}
         for hint in hints:
             assert isinstance(declared.get(hint), bool), f"{tool.name} missing {hint}"
+
+
+def test_plugin_and_package_versions_match():
+    """Both plugin manifests, pyproject, and the MCP serverInfo must report one version."""
+    import json
+    import tomllib
+    from pathlib import Path
+
+    from nba_mcp.server import mcp
+
+    root = Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads((root / "server/pyproject.toml").read_text())
+    expected = pyproject["project"]["version"]
+    for manifest in ("plugin.json", ".claude-plugin/plugin.json"):
+        assert json.loads((root / manifest).read_text())["version"] == expected, manifest
+    assert mcp.version == expected

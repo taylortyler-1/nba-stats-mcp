@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import time
 from collections.abc import Callable
+from importlib.metadata import version
 from typing import Annotated, Any, Literal
 
 import anyio
@@ -21,6 +22,7 @@ from .positions import positions_loaded
 mcp = MCPServer(
     name="hoops-stats",
     title="Hoops Stats",
+    version=version("nba-mcp"),
     instructions=(
         "NBA box-score stats from a local database of recent seasons. "
         "Use get_stat for a specific player's or team's numbers, get_game_log for game-by-game "
