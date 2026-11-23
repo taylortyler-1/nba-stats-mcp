@@ -21,7 +21,7 @@ It covers box-score stats: points, rebounds, assists, steals, blocks, turnovers,
 
 - **Where it works:** Claude Code, Cowork sessions on your own computer, and local-execution threads in ChatGPT desktop's Work mode or Codex (where available on your account). The server runs locally; ordinary cloud chats on claude.ai or ChatGPT don't start it.
 - **uv:** the plugin needs [uv](https://docs.astral.sh/uv/getting-started/installation/) installed. On macOS or Linux, run `curl -LsSf https://astral.sh/uv/install.sh | sh`. On Windows, run `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`. uv installs the right Python version for you.
-- **No VPN while downloading:** stats.nba.com blocks most VPNs and cloud servers. Turn your VPN off when the plugin downloads data. Asking questions about data already downloaded works with or without a VPN.
+- **Network access for refreshes:** the server needs DNS and outbound HTTPS to `stats.nba.com`. Queries against downloaded box scores run locally.
 
 The first start takes a minute or so while uv downloads Python and the server's packages. Later starts are fast.
 
@@ -88,7 +88,8 @@ This plugin isn't affiliated with or endorsed by the NBA. Data comes from the NB
 ## Troubleshooting
 
 - **The tools don't show up:** check that `uv` is installed and on your `PATH`. Desktop apps on macOS may not see a `PATH` set only in your shell profile, so restart the app after installing uv.
-- **"Couldn't download from stats.nba.com":** the site doesn't respond to most VPNs and cloud servers; it stalls until the request times out (about 35 seconds). Turn your VPN off and try again. If you're not on a VPN, the site may be down; try again in a few minutes.
+- **“Couldn't download from stats.nba.com”** means the server started but the download failed. Check the underlying error. DNS failures point to name resolution. Timeouts can reflect network restrictions, a VPN, or a slow endpoint. For a managed session, ask the administrator to allow DNS resolution and outbound HTTPS to `stats.nba.com` on port 443.
+- **Using an offline session:** run `refresh_data` from a connected client first. Once the refresh finishes and the database is closed, copy `nba.duckdb` to a persistent location accessible to the restricted client and set its `NBA_MCP_DB` environment variable to that file’s absolute path. Game queries use that snapshot until you replace it with a newer copy.
 
 ## Layout
 

@@ -219,7 +219,7 @@ The name returned is the most recent name in the data.
 | `per_36 applies to players only` | Use `per_game`, `per_100` or `totals` for teams. |
 | `ranks one stat at a time` | Make one `get_leaders` call per stat. |
 | `The team filter narrows a player leaderboard` | Drop `team` when `entity="team"`. |
-| `Couldn't download from stats.nba.com` | Usually a VPN: ask the user to turn it off and retry. Otherwise the site may be down; retry later. Any seasons listed as already saved are kept. |
+| `Couldn't download from stats.nba.com` | Check the underlying error and whether the server can resolve stats.nba.com and connect over HTTPS. Timeouts can also occur on VPNs or during an upstream outage. Any seasons listed as already saved are kept. |
 | `hasn't started` | A future season was requested. |
 | `No fantasy scoring is set up` | Ask the user for their league's points per stat, call `save_fantasy_scoring`, retry. |
 | `No fantasy scoring profile named` / `Several scoring profiles are saved` | Use a listed profile name, or save one as `default`. |

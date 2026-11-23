@@ -17,7 +17,7 @@ The hoops-stats MCP server answers questions from a local database of NBA **box 
 | `get_leaders` | Rank players or teams by one stat. `stat="fpts"` for a fantasy leaderboard; `position="G"` (or F, C) for "top steals among guards". |
 | `save_fantasy_scoring` | Save the user's league scoring (points per stat) so `fpts` works from then on. |
 | `delete_fantasy_scoring` | Remove a saved scoring profile, only when asked. |
-| `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes a few seconds per season. Fails if the user is on a VPN. |
+| `refresh_data` | Download new games from stats.nba.com. Writes to the database; takes a few seconds per season. Requires DNS and HTTPS access to stats.nba.com. |
 
 If these tools aren't available, explain that the plugin needs to be enabled in a client that supports local MCP servers, with `uv` installed and available on its PATH. Help the user check the setup instead of answering from memory.
 

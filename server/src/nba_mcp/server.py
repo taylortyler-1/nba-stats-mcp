@@ -72,11 +72,11 @@ DELETE_LOCAL = ToolAnnotations(
 
 NO_DATA = "No NBA data is loaded yet. Call refresh_data to download it (a few seconds), then retry."
 BUSY = "The NBA database is being updated right now. Retry in a few seconds."
-# stats.nba.com stalls, rather than refusing, requests from VPNs and cloud servers.
 DOWNLOAD_FAILED = (
-    "Couldn't download from stats.nba.com ({error}).{saved} The site blocks most VPNs and cloud "
-    "servers, so if the user is on a VPN, ask them to turn it off and try again. Otherwise the "
-    "site may be down; try again in a few minutes."
+    "Couldn't download from stats.nba.com ({error}).{saved} Check that the MCP process can "
+    "resolve stats.nba.com and reach it over HTTPS (port 443). A timeout can also occur on "
+    "a VPN or when the NBA endpoint is unavailable. In a restricted session, use a database "
+    "refreshed on a connected machine and set NBA_MCP_DB to the local copy."
 )
 
 MAX_REFRESH_SEASONS = 5
@@ -309,14 +309,15 @@ async def _ensure_positions() -> None:
     async with _refresh_lock:
         try:
             df = await anyio.to_thread.run_sync(ingest.fetch_players)
-            await anyio.to_thread.run_sync(ingest.store_players, df)
-        except db.DatabaseBusy:
-            raise ToolError(BUSY) from None
         except Exception as exc:  # nba_api network errors vary
             raise ToolError(
                 "Player positions aren't loaded yet and downloading them failed. "
                 + DOWNLOAD_FAILED.format(error=f"{type(exc).__name__}: {exc}", saved="")
             ) from exc
+        try:
+            await anyio.to_thread.run_sync(ingest.store_players, df)
+        except db.DatabaseBusy:
+            raise ToolError(BUSY) from None
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -522,9 +523,15 @@ async def refresh_data(
                 await ctx.report_progress(
                     i, steps, f"Downloading {season} {season_type} {entity} games"
                 )
-                df = await anyio.to_thread.run_sync(
-                    ingest.fetch_slice, entity, season, season_type
-                )
+                try:
+                    df = await anyio.to_thread.run_sync(
+                        ingest.fetch_slice, entity, season, season_type
+                    )
+                except Exception as exc:
+                    saved = f" Already saved: {loaded}." if loaded else ""
+                    raise ToolError(
+                        DOWNLOAD_FAILED.format(error=f"{type(exc).__name__}: {exc}", saved=saved)
+                    ) from exc
                 n = await anyio.to_thread.run_sync(
                     ingest.store_slice, entity, season, season_type, df
                 )
@@ -536,13 +543,6 @@ async def refresh_data(
             raise ToolError(
                 "Couldn't get write access to the database; another update may be running."
             ) from None
-        except Exception as exc:
-            saved = f" Already saved: {loaded}." if loaded else ""
-            raise ToolError(
-                DOWNLOAD_FAILED.format(
-                    error=f"{type(exc).__name__}: {exc}", saved=saved
-                )
-            ) from exc
 
         # Positions only power the get_leaders position filter, so a failure here
         # keeps the games just downloaded (and any previously saved positions).
