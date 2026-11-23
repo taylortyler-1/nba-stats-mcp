@@ -581,3 +581,16 @@ def test_qualification():
 
     assert tools.Qualification().out() == {}
     assert tools.Qualification().passes({"gp": 0, "min": None})
+
+
+def test_every_tool_declares_all_four_hints():
+    """OpenAI's app directory rejects tools missing any hint or using non-booleans."""
+    import asyncio
+
+    from nba_mcp.server import mcp
+
+    hints = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+    for tool in asyncio.run(mcp.list_tools()):
+        declared = tool.annotations.model_dump(by_alias=True) if tool.annotations else {}
+        for hint in hints:
+            assert isinstance(declared.get(hint), bool), f"{tool.name} missing {hint}"

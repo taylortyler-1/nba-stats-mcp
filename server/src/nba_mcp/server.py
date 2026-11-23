@@ -36,7 +36,10 @@ mcp = MCPServer(
 )
 
 READ_ONLY = ToolAnnotations(
-    read_only_hint=True, idempotent_hint=True, open_world_hint=False
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 # refresh_data writes to the local database and calls stats.nba.com. Re-running it
@@ -49,10 +52,11 @@ REFRESH = ToolAnnotations(
     open_world_hint=True,
 )
 
+# Saving a profile name that already exists overwrites its weights, so it is destructive.
 SAVE_LOCAL = ToolAnnotations(
     title="Save fantasy scoring",
     read_only_hint=False,
-    destructive_hint=False,
+    destructive_hint=True,
     idempotent_hint=True,
     open_world_hint=False,
 )
